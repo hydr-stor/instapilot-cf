@@ -1,0 +1,1 @@
+{"name":"instapilot-cf","private":true,"type":"module","scripts":{"deploy":"wrangler deploy"}}

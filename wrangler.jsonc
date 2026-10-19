@@ -1,0 +1,11 @@
+{
+  "name": "instapilot",
+  "main": "src/worker.js",
+  "keep_vars": true,
+  "compatibility_date": "2025-09-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "instapilot", "database_id": "ضع-هنا-معرف-قاعدة-D1" }
+  ],
+  "observability": { "enabled": true }
+}
