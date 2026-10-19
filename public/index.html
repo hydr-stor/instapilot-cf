@@ -64,7 +64,7 @@ const logo=(s,a,id)=>`<svg class="lg" width="${s}" height="${s}" viewBox="0 0 24
 const api=async(p,m='GET',b)=>{const r=await fetch('/api/'+p,{method:m,headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'خطأ');return j};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const toast=(t,k='')=>{const e=document.createElement('div');e.className='toast '+k;e.textContent=t;document.body.append(e);setTimeout(()=>e.remove(),2800)};
-const ST={sent:['أُرسل','ok'],escalated:['محوّل لصاحب المتجر','wa'],error:['خطأ','er'],ai_off:['الرد متوقف',''],not_configured:['التكامل غير مفعّل',''],limit_reached:['تجاوز الحد','er'],pending:['قيد المعالجة','']};
+const ST={sent:['أُرسل','ok'],escalated:['محوّل لصاحب المتجر','wa'],error:['خطأ','er'],ai_off:['الرد متوقف',''],not_configured:['التكامل غير مفعّل',''],limit_reached:['تجاوز الحد','er'],pending:['قيد المعالجة',''],processing:['قيد المعالجة','']};
 function splash(){if(sessionStorage.sp||matchMedia('(prefers-reduced-motion:reduce)').matches)return;sessionStorage.sp=1;const d=document.createElement('div');d.id='sp';d.innerHTML=`<div class="sg"></div><div class="sc">${logo(96,1,'s')}<div class="sn serif">InstaPilot <b>AI</b></div><div class="st">ردود ذكية على رسائل متجرك</div></div>`;document.body.append(d);setTimeout(()=>d.classList.add('out'),2500);setTimeout(()=>d.remove(),3150)}
 /* ---------- auth ---------- */
 const setErr=(el,m)=>{const f=el.closest('.f');f.classList.toggle('bad',!!m);f.querySelector('.fe').textContent=m||''};
