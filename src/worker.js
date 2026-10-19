@@ -241,7 +241,7 @@ route('GET','/api/health',async()=>({users:(await one('select count(*) n from us
 route('POST','/api/login',async c=>{if(await limited('lg'+c.ip,10,600000))throw[429,'محاولات كثيرة، حاول بعد 10 دقائق'];const u=await one('select * from users where email=?',String(c.body.email||'').trim().toLowerCase());
 if(!u||!(await checkPw(String(c.body.password||''),u.salt,u.hash)))throw[401,'البريد أو كلمة المرور غير صحيحة'];return login(c,u.id)},{pub:1});
 route('POST','/api/logout',async c=>{await run('delete from sessions where token=?',c.tok);c.cookie='sid=; Max-Age=0; Path=/';return{ok:1}});
-route('GET','/api/me',async c=>({email:c.user.email,role:c.user.role,plan:await one('select * from plans where id=?',c.user.plan),used:await used(c.store.id),store:{...c.store,ig_token:undefined,ig_connected:!!c.store.ig_token},live:E.LIVE==='true'}));
+route('GET','/api/me',async c=>{const[plan,u]=await Promise.all([one('select * from plans where id=?',c.user.plan),used(c.store.id)]);return{email:c.user.email,role:c.user.role,plan,used:u,store:{...c.store,ig_token:undefined,ig_connected:!!c.store.ig_token},live:E.LIVE==='true'}});
 route('PUT','/api/store',async c=>{const b=c.body;await run('update stores set name=?,description=?,hours=?,delivery=?,tone=?,ai_enabled=? where id=?',b.name||c.store.name,b.description??'',b.hours??'',b.delivery??'',b.tone||c.store.tone,b.ai_enabled?1:0,c.store.id);return{ok:1}});
 route('GET','/api/items',c=>all('select * from items where store_id=?',c.store.id));
 route('POST','/api/items',async c=>{const b=c.body;if(!['product','faq'].includes(b.kind)||!b.title)throw[400,'بيانات غير صحيحة'];await run('insert into items(store_id,kind,title,price,body) values(?,?,?,?,?)',c.store.id,b.kind,b.title,b.price||'',b.body||'');return{ok:1}});
@@ -282,7 +282,7 @@ route('GET','/api/admin/export',async c=>({exported:new Date().toISOString(),use
 const page=(P)=>{const em=String(E.ADMIN_EMAIL||'').replace(/[<>&"]/g,'');return new Response(`<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;max-width:640px;margin:20px auto;padding:0 16px;line-height:1.9"><h1>${P?'سياسة الخصوصية':'حذف البيانات'}</h1>`+(P?`<p>تستخدم InstaPilot AI صلاحيات إنستغرام الرسمية لقراءة رسائل حساب المتجر المربوط والرد عليها نيابةً عن صاحب المتجر. نحفظ نص الرسائل والردود وسجل الأخطاء لعرضها لصاحب المتجر، ونخزّن رمز الوصول مشفراً. لا نبيع البيانات ولا نطلب كلمة مرور إنستغرام. قد تُرسل نصوص الرسائل إلى مزوّد الذكاء الاصطناعي لتوليد الرد. للاستفسار: ${em}</p>`:`<p>لحذف بياناتك راسلنا على ${em} من بريد حسابك مع ذكر اسم المتجر، وسنحذف الحساب والمحادثات ورمز الوصول خلال 30 يوماً. ويمكنك أيضاً إزالة التطبيق من إعدادات إنستغرام (التطبيقات والمواقع).</p>`),{headers:{'content-type':'text/html; charset=utf-8'}})};
 export default{async scheduled(ev,env,ctx){E=env;ctx.waitUntil((async()=>{try{if(E.ENC_KEY){await init();await sweep()}}catch(e){console.error('cron',e)}})())},
 async fetch(req,env,ctx){E=env;const url=new URL(req.url),p=url.pathname;
-try{if(!E.ENC_KEY)return J({error:'ENC_KEY غير مضبوط'},500);await init();
+try{if(!(p=='/webhook/instagram'||p=='/privacy'||p=='/data-deletion'||p.startsWith('/api/')))return E.ASSETS.fetch(req);if(!E.ENC_KEY)return J({error:'ENC_KEY غير مضبوط'},500);await init();
 if(p=='/webhook/instagram'){
 if(req.method=='GET'){const t=url.searchParams.get('hub.verify_token');return t&&t===E.IG_VERIFY_TOKEN?new Response(url.searchParams.get('hub.challenge')):new Response('forbidden',{status:403})}
 const raw=await req.arrayBuffer(),secrets=[E.IG_APP_SECRET,E.META_APP_SECRET].filter(Boolean);if(!secrets.length)return J({error:'webhook not configured'},503);
@@ -294,7 +294,7 @@ let body={};if(req.method!='GET'){const t=await req.text();if(t)try{body=JSON.pa
 const c={ip:(req.headers.get('cf-connecting-ip')||req.headers.get('x-forwarded-for')||'').split(',')[0].trim(),q:url.searchParams,body};
 c.tok=((req.headers.get('cookie')||'').match(/sid=([a-f0-9]+)/)||[])[1]||(req.headers.get('authorization')||'').replace('Bearer ','').trim()||undefined;
 if(!r.pub){const s=c.tok&&await one('select user_id from sessions where token=? and created>?',c.tok,Date.now()-2592000000);if(!s)return J({error:'سجّل الدخول أولاً'},401);
-c.user=await one('select * from users where id=?',s.user_id);c.store=await one('select * from stores where user_id=?',c.user.id);if(r.admin&&c.user.role!=='admin')return J({error:'ممنوع'},403)}
+[c.user,c.store]=await Promise.all([one('select * from users where id=?',s.user_id),one('select * from stores where user_id=?',s.user_id)]);if(r.admin&&c.user.role!=='admin')return J({error:'ممنوع'},403)}
 const out=await r.f(c);if(out?.redirect)return new Response(null,{status:302,headers:{location:out.redirect}});return J(out,200,c.cookie?{'set-cookie':c.cookie}:{})}
 return E.ASSETS.fetch(req)}
 catch(e){if(Array.isArray(e))return J({error:e[1]},e[0]);console.error(e);return J({error:'خطأ في الخادم'},500)}}};
