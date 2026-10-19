@@ -5,7 +5,7 @@
   "compatibility_date": "2025-09-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "d1_databases": [
-    { "binding": "DB", "database_name": "instapilot", "database_id": "ضع-هنا-معرف-قاعدة-D1" }
+    { "binding": "DB", "database_name": "instapilot", "database_id": "babceac2-555e-40c2-8cb4-d93e069156c0" }
   ],
   "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true }
