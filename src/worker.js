@@ -33,7 +33,13 @@ if(!lines.length||!addr||phone.replace(/\D/g,'').length<9)return null;
 const sub=lines.reduce((t,l)=>t+l.price*l.qty,0),total=sub+DELIVERY;
 await run('insert or ignore into bookings(store_id,mid,sender,address,phone,items,subtotal,delivery,total) values(?,?,?,?,?,?,?,?,?)',store.id,mid,sender,addr,phone,JSON.stringify(lines),sub,DELIVERY,total);
 return{lines,addr,phone,total,noprice:lines.some(l=>!l.price)}}
-const invoice=k=>'تم تسجيل حجزك ✅\n'+k.lines.map(l=>`• ${l.name} × ${l.qty}`).join('\n')+`\nالتوصيل: ${fmt(DELIVERY)} د.ع\n`+(k.noprice?'المجموع الكلي: يتأكد من صاحب المتجر':`المجموع الكلي: ${fmt(k.total)} د.ع`)+`\nالعنوان: ${k.addr}\nالهاتف: ${k.phone}\nراح يتواصل وياك صاحب المتجر لتأكيد الحجز 🌷`;
+const B=s=>T8.encode(s).length;
+const clip=(s,n=950)=>{s=String(s);if(B(s)<=n)return s;let o='';for(const ch of s){if(B(o+ch)>n-3)break;o+=ch}return o+'...'};
+const invoice=k=>{const head='تم تسجيل حجزك ✅\n',tail=`\nالتوصيل: ${fmt(DELIVERY)} د.ع\n`+(k.noprice?'المجموع الكلي: يتأكد من صاحب المتجر':`المجموع الكلي: ${fmt(k.total)} د.ع`)+`\nالعنوان: ${k.addr}\nالهاتف: ${k.phone}\nراح يتواصل وياك صاحب المتجر لتأكيد الحجز 🌷`,pr=l=>l.price?`${fmt(l.price)} د.ع`:'غير محدد',
+full=head+k.lines.map(l=>`• ${l.name} × ${l.qty} (سعر القطعة ${pr(l)})`).join('\n')+tail;if(B(full)<=950)return full;
+const mid=head+k.lines.map(l=>`• ${l.name} × ${l.qty} (${pr(l)})`).join('\n')+tail;if(B(mid)<=950)return mid;
+return clip(head+`عدد القطع: ${k.lines.reduce((t,l)=>t+l.qty,0)}`+tail)};
+async function igSend(store,to,text){const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:to},message:{text:clip(text)}})});if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300))}
 const SCHEMA=[
 `create table if not exists users(id integer primary key,email text unique,hash text,salt text,role text default 'owner',plan text default 'free',created text default current_timestamp)`,
 `create table if not exists sessions(token text primary key,user_id integer,created integer)`,
@@ -45,13 +51,14 @@ const SCHEMA=[
 `create table if not exists resets(email text primary key,code_hash text,salt text,expires integer,attempts integer,sent_at integer)`,
 `create table if not exists meta(k text primary key,v text)`,
 `create table if not exists rl(k text,t integer)`,
-`create table if not exists bookings(id integer primary key,store_id integer,mid text unique,sender text,address text,phone text,items text,subtotal integer,delivery integer,total integer,status text default 'new',created text default current_timestamp)`,
+`create table if not exists bookings(id integer primary key,store_id integer,mid text unique,sender text,address text,phone text,items text,subtotal integer,delivery integer,total integer,status text default 'new',notified integer default 0,created text default current_timestamp)`,
 `create index if not exists idx_bk_store on bookings(store_id,id)`,
 `create index if not exists idx_msg_store on messages(store_id,id)`,
 `create index if not exists idx_items_store on items(store_id)`,
 `create index if not exists idx_rl on rl(k,t)`,
 `create index if not exists idx_msg_status on messages(status,created)`];
 async function init(){if(ready)return;await E.DB.batch(SCHEMA.map(s=>E.DB.prepare(s)));
+if(!(await one("select count(*) n from pragma_table_info('bookings') where name='notified'")).n)await run('alter table bookings add column notified integer default 0').catch(()=>{});
 await E.DB.batch([`insert or ignore into meta values('created',datetime('now'))`,`insert or ignore into plans values('free','مجاني',50,'0')`,`insert or ignore into plans values('basic','أساسي',500,'15000 د.ع')`,`insert or ignore into plans values('pro','احترافي',3000,'40000 د.ع')`].map(s=>E.DB.prepare(s)));ready=true}
 const limited=async(k,n,ms)=>{const now=Date.now();await run('delete from rl where t<?',now-3600000);await run('insert into rl values(?,?)',k,now);return(await one('select count(*) n from rl where k=? and t>?',k,now-ms)).n>n};
 const used=async sid=>(await one(`select count(*) n from messages where store_id=? and reply is not null and status in('sent','simulated') and created>=date('now','start of month')`,sid)).n;
@@ -75,7 +82,7 @@ if(E.LIVE!=='true'||!(E.AI||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_to
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
 if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
 let a=await ai(store,text,await hist(store.id,sender,mid)),st='sent';if(a.includes('BOOKING:')){const b=bkParse(a),k=b?.j&&await mkBooking(store,sender,mid,b.j);a=k?invoice(k):'عفواً ما كدرت أسجل الحجز 🙏 تكدر تكتبلي المنتجات وعددها والعنوان ورقم هاتفك؟'}else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}
-const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:a.slice(0,900)}})});
+const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:clip(a)}})});
 if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300));
 await run('update messages set reply=?,status=?,error=null where mid=?',a,st,mid)}catch(e){try{await upd('error',String(e?.message||e).slice(0,500))}catch(x){console.error(x)}}}
 async function processWebhook(b){for(const e of b.entry||[])for(const m of e.messaging||[]){try{if(!m.message?.text||m.message.is_echo)continue;
@@ -127,7 +134,11 @@ route('POST','/api/items',async c=>{const b=c.body;if(!['product','faq'].include
 route('POST','/api/items/delete',async c=>{await run('delete from items where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/messages',c=>all('select * from messages where store_id=? order by id desc limit 100',c.store.id));
 route('GET','/api/bookings',c=>all('select * from bookings where store_id=? order by id desc limit 200',c.store.id));
-route('POST','/api/bookings/status',async c=>{if(!['new','confirmed','delivered','cancelled'].includes(c.body.status))throw[400,'حالة غير صحيحة'];await run('update bookings set status=? where id=? and store_id=?',c.body.status,c.body.id,c.store.id);return{ok:1}});
+route('POST','/api/bookings/status',async c=>{const st=c.body.status;if(!['new','confirmed','delivered','cancelled'].includes(st))throw[400,'حالة غير صحيحة'];
+const b=await one('select * from bookings where id=? and store_id=?',c.body.id,c.store.id);if(!b)throw[404,'الحجز غير موجود'];
+await run('update bookings set status=? where id=?',st,b.id);const out={ok:1};
+if(st=='confirmed'&&b.status!='confirmed'&&!b.notified){if(!c.store.ig_token)out.notify='no_ig';else try{await igSend(c.store,b.sender,'تم الحجز من صاحب المتجر ✅');await run('update bookings set notified=1 where id=?',b.id);out.notify='sent'}catch(e){console.error('notify',e);out.notify='failed'}}
+return out});
 route('POST','/api/bookings/delete',async c=>{await run('delete from bookings where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/instagram/connect',c=>{if(!E.IG_APP_ID||!E.IG_APP_SECRET)return{configured:false,msg:'لم تُضبط بيانات تطبيق Meta بعد (IG_APP_ID / IG_APP_SECRET). الربط غير مفعّل.'};
 return{configured:true,url:`https://www.instagram.com/oauth/authorize?client_id=${E.IG_APP_ID}&redirect_uri=${encodeURIComponent(E.PUBLIC_URL+'/api/instagram/callback')}&response_type=code&scope=instagram_business_basic,instagram_business_manage_messages&state=${c.tok.slice(0,16)}`}});
