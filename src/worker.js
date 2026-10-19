@@ -194,7 +194,7 @@ if(act.length==1&&STRONG_RE.test(n)&&!NEG_RE.test(n)&&!Q_RE.test(n)&&n.length<=6
 else{let v='';try{v=await llm(clsSys(act),turns(h,text),60,0)}catch(e){console.error('cls',e)}console.log('cancel-check',v);const m=v.match(/\bYES\b[^\d]{0,6}(\d+)|\bASK\b|\bNO\b/i);if(m){if(m[1])id=act.length==1?act[0].id:+m[1];else if(/ASK/i.test(m[0]))ask=true}}
 if(id){const k=await cancelBooking(store,sender,{id});if(k)a=cancelMsg(k)}else if(ask&&act.length>1)a=askMsg(act)}
 if(a===null&&ps.length&&!cancelTalk&&(d||CATALOG_RE.test(n)||GATE_RE.test(n)||last.includes(ITEMS_P)))a=await orderFlow(store,sender,mid,text,h,d,ps,n,last);
-if(a===null){a=await ai(store,text,h,bks);if(/BOOKING:|CANCEL:/.test(a))a=SAFE_MSG;else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}else if(act.length&&CLAIM_RE.test(nrm(a)))a='حتى ألغي حجزك اكتبلي: الغي حجزي 🙏'}
+if(a===null){a=await ai(store,text,h,bks);if(/BOOKING:|CANCEL:/.test(a))a=SAFE_MSG;else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}else if(/تم\s+(تسجيل|حجز|تاكيد)|سجلت\s+(ال)?حجز|حجزتلك/.test(nrm(a)))a=SAFE_MSG;else if(act.length&&CLAIM_RE.test(nrm(a)))a='حتى ألغي حجزك اكتبلي: الغي حجزي 🙏'}
 await igReply(store,sender,a);
 await run('update messages set reply=?,status=?,error=null where mid=?',a,st,mid)}catch(e){try{await upd('error',String(e?.message||e).slice(0,500))}catch(x){console.error(x)}}}
 
