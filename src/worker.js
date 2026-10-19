@@ -98,6 +98,8 @@ async function mail(to,subject,html){if(!E.BREVO_API_KEY||!E.MAIL_FROM)throw[503
 const r=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'content-type':'application/json','api-key':E.BREVO_API_KEY,accept:'application/json'},body:JSON.stringify({sender:{name:'InstaPilot AI',email:E.MAIL_FROM},to:[{email:to}],subject,htmlContent:html})});
 if(!r.ok){console.error('mail fail',r.status,(await r.text()).slice(0,200));throw[502,'تعذّر إرسال الرمز، حاول لاحقاً']}}
 async function llm(sys,msgs,max=400,temp){const T=temp!=null;
+if(E.GROQ_API_KEY){const r=await tf('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+E.GROQ_API_KEY},body:JSON.stringify({model:E.GROQ_MODEL||'openai/gpt-oss-120b',messages:[{role:'system',content:sys},...msgs],reasoning_effort:'low',include_reasoning:false,max_completion_tokens:Math.max(1024,max*3),...(T?{temperature:temp}:{})})},20000);
+const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error?.message||('AI error '+r.status));const c=j.choices?.[0],t=String(c?.message?.content||'').trim();if(!t&&c?.finish_reason=='length')throw new Error('AI output truncated');return t}
 if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},...msgs],max_tokens:max,...(T?{temperature:temp}:{})});return String(r.response||r.choices?.[0]?.message?.content||'').trim()}
 if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:msgs.map(m=>({role:m.role=='assistant'?'model':'user',parts:[{text:m.content}]})),...(T?{generationConfig:{temperature:temp}}:{})})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return(j.candidates?.[0]?.content?.parts?.[0]?.text||'').trim()}
@@ -121,7 +123,7 @@ ${info}${bk}`;
 const r=(await llm(sys,turns(h,text),300,0.3))||'ESCALATE';
 const ok=arD([...(h||[]).filter(m=>m.role=='user').map(m=>m.content),text,store.description,store.hours,store.delivery,String(DELIVERY),...prods.map(p=>p.title+' '+p.price+' '+(p.body||'')),...faq.map(i=>i.title+' '+i.body),...(bks||[]).map(b=>b.id)].join(' ')).replace(/[,٬]/g,'');
 return(arD(r).replace(/[,٬]/g,'').match(/\d{3,}/g)||[]).some(x=>!ok.includes(x))?SAFE_MSG:r}
-async function ai(store,text,h,bks,d,last){for(let i=0;;i++){try{return await aiOnce(store,text,h,bks,d,last)}catch(e){if(i>=2||!/demand|overload|unavailable|503|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
+async function ai(store,text,h,bks,d,last){for(let i=0;;i++){try{return await aiOnce(store,text,h,bks,d,last)}catch(e){if(i>=2||!/demand|overload|unavailable|503|502|429|rate.?limit|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
 const ev=(sid,sender,kind)=>run('insert into events(store_id,sender,kind) values(?,?,?)',sid,sender,kind);
 const getDraft=async(sid,sender)=>{const r=await one("select data from drafts where store_id=? and sender=? and updated>=datetime('now','-1 day')",sid,sender);try{return r?JSON.parse(r.data):null}catch{return null}};
 const putDraft=(sid,sender,d)=>run("insert or replace into drafts(store_id,sender,data,updated) values(?,?,?,datetime('now'))",sid,sender,JSON.stringify(d));
@@ -207,7 +209,7 @@ const upd=(s,e)=>run('update messages set status=?,error=? where mid=?',s,e??nul
 try{const c=await run("update messages set status='processing' where mid=? and status='pending'",mid);if(c.meta.changes!==1)return;
 for(let i=0;i<10&&await one("select 1 x from messages where store_id=? and sender=? and status in('pending','processing') and id<(select id from messages where mid=?) and created>=datetime('now','-2 minutes')",store.id,sender,mid);i++)await new Promise(r=>setTimeout(r,1000));
 if(!store.ai_enabled)return await upd('ai_off');
-if(E.LIVE!=='true'||!(E.AI||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
+if(E.LIVE!=='true'||!(E.AI||E.GROQ_API_KEY||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
 if(await one('select 1 x from blocked where store_id=? and sender=?',store.id,sender))return await upd('blocked');
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
 if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
