@@ -19,6 +19,21 @@ const aesKey=async()=>crypto.subtle.importKey('raw',await crypto.subtle.digest('
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12)),c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await aesKey(),T8.encode(t))),o=new Uint8Array(12+c.length);o.set(iv);o.set(c,12);return btoa(String.fromCharCode(...o))};
 const dec=async s=>{const b=Uint8Array.from(atob(s),x=>x.charCodeAt(0));return D8.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:b.slice(0,12)},await aesKey(),b.slice(12)))};
 const tf=(u,o={},ms=8000)=>fetch(u,{...o,signal:AbortSignal.timeout(ms)});
+const DELIVERY=5000;
+const arD=s=>String(s??'').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+const parsePrice=s=>{const t=arD(s).replace(/[,٬،]/g,''),m=t.match(/\d+(\.\d+)?/);if(!m)return 0;let n=Math.round(+m[0]);if(n>0&&n<1000&&/[أا]لف/.test(t))n*=1000;return n};
+const fmt=n=>Number(n||0).toLocaleString('en-US');
+const turns=(h,t)=>{const o=[];for(const m of[...(h||[]),{role:'user',content:t}]){const c=String(m.content||'').trim();if(!c)continue;if(o.length&&o[o.length-1].role==m.role)o[o.length-1].content+='\n'+c;else o.push({role:m.role,content:c})}while(o.length&&o[0].role!='user')o.shift();return o};
+const hist=async(sid,sender,mid)=>(await all(`select text,reply from messages where store_id=? and sender=? and id<(select id from messages where mid=?) and created>=datetime('now','-1 day') order by id desc limit 8`,sid,sender,mid)).reverse().flatMap(r=>[{role:'user',content:r.text},...(r.reply?[{role:'assistant',content:r.reply}]:[])]);
+const bkParse=a=>{const i=a.indexOf('BOOKING:');if(i<0)return null;const s=a.indexOf('{',i);if(s<0)return{bad:1};let d=0;for(let k=s;k<a.length;k++){const c=a[k];if(c=='{')d++;else if(c=='}'&&--d==0){try{return{j:JSON.parse(a.slice(s,k+1))}}catch{return{bad:1}}}}return{bad:1}};
+async function mkBooking(store,sender,mid,j){const its=await all("select * from items where store_id=? and kind='product'",store.id),M=new Map();
+for(const x of Array.isArray(j.items)?j.items:[]){const it=its.find(i=>i.id==x?.id)||its.find(i=>x?.name&&i.title.includes(x.name)),q=Math.floor(+arD(x?.qty));if(!it||!(q>0)||q>999)continue;const l=M.get(it.id)||{id:it.id,name:it.title,qty:0,price:parsePrice(it.price)};l.qty+=q;M.set(it.id,l)}
+const lines=[...M.values()],addr=String(j.address||'').trim().slice(0,300),phone=arD(j.phone).replace(/[^\d+]/g,'');
+if(!lines.length||!addr||phone.replace(/\D/g,'').length<9)return null;
+const sub=lines.reduce((t,l)=>t+l.price*l.qty,0),total=sub+DELIVERY;
+await run('insert or ignore into bookings(store_id,mid,sender,address,phone,items,subtotal,delivery,total) values(?,?,?,?,?,?,?,?,?)',store.id,mid,sender,addr,phone,JSON.stringify(lines),sub,DELIVERY,total);
+return{lines,addr,phone,total,noprice:lines.some(l=>!l.price)}}
+const invoice=k=>'تم تسجيل حجزك ✅\n'+k.lines.map(l=>`• ${l.name} × ${l.qty}`).join('\n')+`\nالتوصيل: ${fmt(DELIVERY)} د.ع\n`+(k.noprice?'المجموع الكلي: يتأكد من صاحب المتجر':`المجموع الكلي: ${fmt(k.total)} د.ع`)+`\nالعنوان: ${k.addr}\nالهاتف: ${k.phone}\nراح يتواصل وياك صاحب المتجر لتأكيد الحجز 🌷`;
 const SCHEMA=[
 `create table if not exists users(id integer primary key,email text unique,hash text,salt text,role text default 'owner',plan text default 'free',created text default current_timestamp)`,
 `create table if not exists sessions(token text primary key,user_id integer,created integer)`,
@@ -30,6 +45,8 @@ const SCHEMA=[
 `create table if not exists resets(email text primary key,code_hash text,salt text,expires integer,attempts integer,sent_at integer)`,
 `create table if not exists meta(k text primary key,v text)`,
 `create table if not exists rl(k text,t integer)`,
+`create table if not exists bookings(id integer primary key,store_id integer,mid text unique,sender text,address text,phone text,items text,subtotal integer,delivery integer,total integer,status text default 'new',created text default current_timestamp)`,
+`create index if not exists idx_bk_store on bookings(store_id,id)`,
 `create index if not exists idx_msg_store on messages(store_id,id)`,
 `create index if not exists idx_items_store on items(store_id)`,
 `create index if not exists idx_rl on rl(k,t)`,
@@ -41,15 +58,15 @@ const used=async sid=>(await one(`select count(*) n from messages where store_id
 async function mail(to,subject,html){if(!E.BREVO_API_KEY||!E.MAIL_FROM)throw[503,'إرسال البريد غير مُعدّ بعد'];
 const r=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'content-type':'application/json','api-key':E.BREVO_API_KEY,accept:'application/json'},body:JSON.stringify({sender:{name:'InstaPilot AI',email:E.MAIL_FROM},to:[{email:to}],subject,htmlContent:html})});
 if(!r.ok){console.error('mail fail',r.status,(await r.text()).slice(0,200));throw[502,'تعذّر إرسال الرمز، حاول لاحقاً']}}
-async function aiOnce(store,text){const items=await all('select * from items where store_id=?',store.id);
-const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+items.map(i=>i.kind=='product'?`منتج: ${i.title} | السعر: ${i.price} | ${i.body}`:`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
-const sys=`أنت مساعد ودود لمتجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). أجب بحرية وباختصار على التحية والشكر والأسئلة العامة والمحادثة العادية. أما المعلومات الخاصة بالمتجر (الأسعار، المنتجات، التوفر، التوصيل، الخصومات، الضمان، المواعيد) فاعتمد فقط على المعلومات أدناه ولا تخترع شيئاً منها أبداً. إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات، أجب بكلمة ESCALATE فقط.\n\n${info}`;
-if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},{role:'user',content:text}],max_tokens:400});return String(r.response||r.choices?.[0]?.message?.content||'ESCALATE').trim()}
-if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:[{role:'user',parts:[{text}]}]})});
+async function aiOnce(store,text,h){const items=await all('select * from items where store_id=?',store.id);
+const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+items.map(i=>i.kind=='product'?`منتج [#${i.id}]: ${i.title} | السعر: ${i.price} | ${i.body}`:`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
+const sys=`أنت مساعد ودود لمتجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). أجب بحرية وباختصار على التحية والشكر والأسئلة العامة والمحادثة العادية. أما المعلومات الخاصة بالمتجر (الأسعار، المنتجات، التوفر، التوصيل، الخصومات، الضمان، المواعيد) فاعتمد فقط على المعلومات أدناه ولا تخترع شيئاً منها أبداً. إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات، أجب بكلمة ESCALATE فقط.\n\nالحجز: إذا طلب الزبون يحجز أو يطلب منتجات، اجمع منه 3 أشياء: المنتجات مع عدد كل منتج، والعنوان، ورقم هاتفه. ارجع لمحادثتكم السابقة لتعرف شنو ذكر، واسأله عن الناقص فقط وباختصار. لا تحسب مجاميع ولا تذكر سعر التوصيل ولا المجموع، النظام يرسل الفاتورة بنفسه. لما تكتمل الثلاثة وهو يريد الحجز بوضوح، يكون ردّك كله سطراً واحداً فقط بهذا الشكل بالضبط: BOOKING:{"items":[{"id":1,"qty":2}],"address":"العنوان","phone":"07701234567"} حيث id هو رقم المنتج من القائمة (الرقم بعد #) ولا تستخدم غير منتجات القائمة. لا تكتب كلمة BOOKING بأي حالة ثانية.\n\n${info}`;
+if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},...turns(h,text)],max_tokens:400});return String(r.response||r.choices?.[0]?.message?.content||'ESCALATE').trim()}
+if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:turns(h,text).map(m=>({role:m.role=='assistant'?'model':'user',parts:[{text:m.content}]}))})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return(j.candidates?.[0]?.content?.parts?.[0]?.text||'ESCALATE').trim()}
-const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:text}]})});
+const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:400,system:sys,messages:turns(h,text)})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return j.content[0].text.trim()}
-async function ai(store,text){for(let i=0;;i++){try{return await aiOnce(store,text)}catch(e){if(i>=2||!/demand|overload|unavailable|503|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
+async function ai(store,text,h){for(let i=0;;i++){try{return await aiOnce(store,text,h)}catch(e){if(i>=2||!/demand|overload|unavailable|503|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
 async function handle(store,sender,mid,text){
 const upd=(s,e)=>run('update messages set status=?,error=? where mid=?',s,e??null,mid);
 try{const c=await run("update messages set status='processing' where mid=? and status='pending'",mid);if(c.meta.changes!==1)return;
@@ -57,7 +74,7 @@ if(!store.ai_enabled)return await upd('ai_off');
 if(E.LIVE!=='true'||!(E.AI||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
 if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
-let a=await ai(store,text),st='sent';if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}
+let a=await ai(store,text,await hist(store.id,sender,mid)),st='sent';if(a.includes('BOOKING:')){const b=bkParse(a),k=b?.j&&await mkBooking(store,sender,mid,b.j);a=k?invoice(k):'عفواً ما كدرت أسجل الحجز 🙏 تكدر تكتبلي المنتجات وعددها والعنوان ورقم هاتفك؟'}else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}
 const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:a.slice(0,900)}})});
 if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300));
 await run('update messages set reply=?,status=?,error=null where mid=?',a,st,mid)}catch(e){try{await upd('error',String(e?.message||e).slice(0,500))}catch(x){console.error(x)}}}
@@ -109,6 +126,9 @@ route('GET','/api/items',c=>all('select * from items where store_id=?',c.store.i
 route('POST','/api/items',async c=>{const b=c.body;if(!['product','faq'].includes(b.kind)||!b.title)throw[400,'بيانات غير صحيحة'];await run('insert into items(store_id,kind,title,price,body) values(?,?,?,?,?)',c.store.id,b.kind,b.title,b.price||'',b.body||'');return{ok:1}});
 route('POST','/api/items/delete',async c=>{await run('delete from items where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/messages',c=>all('select * from messages where store_id=? order by id desc limit 100',c.store.id));
+route('GET','/api/bookings',c=>all('select * from bookings where store_id=? order by id desc limit 200',c.store.id));
+route('POST','/api/bookings/status',async c=>{if(!['new','confirmed','delivered','cancelled'].includes(c.body.status))throw[400,'حالة غير صحيحة'];await run('update bookings set status=? where id=? and store_id=?',c.body.status,c.body.id,c.store.id);return{ok:1}});
+route('POST','/api/bookings/delete',async c=>{await run('delete from bookings where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/instagram/connect',c=>{if(!E.IG_APP_ID||!E.IG_APP_SECRET)return{configured:false,msg:'لم تُضبط بيانات تطبيق Meta بعد (IG_APP_ID / IG_APP_SECRET). الربط غير مفعّل.'};
 return{configured:true,url:`https://www.instagram.com/oauth/authorize?client_id=${E.IG_APP_ID}&redirect_uri=${encodeURIComponent(E.PUBLIC_URL+'/api/instagram/callback')}&response_type=code&scope=instagram_business_basic,instagram_business_manage_messages&state=${c.tok.slice(0,16)}`}});
 route('GET','/api/instagram/callback',async c=>{const q=c.q;if(!q.get('code')||q.get('state')!==c.tok.slice(0,16))throw[400,'طلب ربط غير صالح'];
@@ -123,7 +143,7 @@ return{redirect:'/#/ig'}});
 route('GET','/api/admin/overview',async c=>({users:await all('select u.id,u.email,u.plan,u.created,s.name store,(select count(*) from messages m where m.store_id=s.id) msgs from users u join stores s on s.user_id=u.id order by u.id desc'),plans:await all('select * from plans'),errors:(await one("select count(*) n from messages where status='error'")).n}),{admin:1});
 route('POST','/api/admin/plan',async c=>{await run('update plans set monthly_limit=?,price=? where id=?',+c.body.monthly_limit,c.body.price,c.body.id);return{ok:1}},{admin:1});
 route('POST','/api/admin/user-plan',async c=>{await run('update users set plan=? where id=?',c.body.plan,c.body.id);return{ok:1}},{admin:1});
-route('GET','/api/admin/export',async c=>({exported:new Date().toISOString(),users:await all('select id,email,role,plan,created from users'),stores:await all('select id,user_id,name,description,hours,delivery,tone,ai_enabled,ig_user_id from stores'),items:await all('select * from items'),messages:await all('select * from messages')}),{admin:1});
+route('GET','/api/admin/export',async c=>({exported:new Date().toISOString(),users:await all('select id,email,role,plan,created from users'),stores:await all('select id,user_id,name,description,hours,delivery,tone,ai_enabled,ig_user_id from stores'),items:await all('select * from items'),messages:await all('select * from messages'),bookings:await all('select * from bookings')}),{admin:1});
 const page=(P)=>{const em=String(E.ADMIN_EMAIL||'').replace(/[<>&"]/g,'');return new Response(`<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;max-width:640px;margin:20px auto;padding:0 16px;line-height:1.9"><h1>${P?'سياسة الخصوصية':'حذف البيانات'}</h1>`+(P?`<p>تستخدم InstaPilot AI صلاحيات إنستغرام الرسمية لقراءة رسائل حساب المتجر المربوط والرد عليها نيابةً عن صاحب المتجر. نحفظ نص الرسائل والردود وسجل الأخطاء لعرضها لصاحب المتجر، ونخزّن رمز الوصول مشفراً. لا نبيع البيانات ولا نطلب كلمة مرور إنستغرام. قد تُرسل نصوص الرسائل إلى مزوّد الذكاء الاصطناعي لتوليد الرد. للاستفسار: ${em}</p>`:`<p>لحذف بياناتك راسلنا على ${em} من بريد حسابك مع ذكر اسم المتجر، وسنحذف الحساب والمحادثات ورمز الوصول خلال 30 يوماً. ويمكنك أيضاً إزالة التطبيق من إعدادات إنستغرام (التطبيقات والمواقع).</p>`),{headers:{'content-type':'text/html; charset=utf-8'}})};
 export default{async scheduled(ev,env,ctx){E=env;ctx.waitUntil((async()=>{try{if(E.ENC_KEY){await init();await sweep()}}catch(e){console.error('cron',e)}})())},
 async fetch(req,env,ctx){E=env;const url=new URL(req.url),p=url.pathname;
