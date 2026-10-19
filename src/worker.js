@@ -44,16 +44,17 @@ if(!r.ok){console.error('mail fail',r.status,(await r.text()).slice(0,200));thro
 async function aiOnce(store,text){const items=await all('select * from items where store_id=?',store.id);
 const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+items.map(i=>i.kind=='product'?`منتج: ${i.title} | السعر: ${i.price} | ${i.body}`:`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
 const sys=`أنت مساعد ودود لمتجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). أجب بحرية وباختصار على التحية والشكر والأسئلة العامة والمحادثة العادية. أما المعلومات الخاصة بالمتجر (الأسعار، المنتجات، التوفر، التوصيل، الخصومات، الضمان، المواعيد) فاعتمد فقط على المعلومات أدناه ولا تخترع شيئاً منها أبداً. إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات، أجب بكلمة ESCALATE فقط.\n\n${info}`;
+if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},{role:'user',content:text}],max_tokens:400});return String(r.response||r.choices?.[0]?.message?.content||'ESCALATE').trim()}
 if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:[{role:'user',parts:[{text}]}]})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return(j.candidates?.[0]?.content?.parts?.[0]?.text||'ESCALATE').trim()}
 const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:text}]})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return j.content[0].text.trim()}
-async function ai(store,text){for(let i=0;;i++){try{return await aiOnce(store,text)}catch(e){if(i>=2||!/demand|overload|unavailable|429|503|quota|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
+async function ai(store,text){for(let i=0;;i++){try{return await aiOnce(store,text)}catch(e){if(i>=2||!/demand|overload|unavailable|503|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
 async function handle(store,sender,mid,text){
 const upd=(s,e)=>run('update messages set status=?,error=? where mid=?',s,e??null,mid);
 try{const c=await run("update messages set status='processing' where mid=? and status='pending'",mid);if(c.meta.changes!==1)return;
 if(!store.ai_enabled)return await upd('ai_off');
-if(E.LIVE!=='true'||!(E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
+if(E.LIVE!=='true'||!(E.AI||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
 if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
 let a=await ai(store,text),st='sent';if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}
