@@ -18,6 +18,7 @@ const checkPw=async(pw,salt,st)=>{const[i,h]=String(st).split(':');return same(a
 const aesKey=async()=>crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',T8.encode(E.ENC_KEY)),'AES-GCM',false,['encrypt','decrypt']);
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12)),c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await aesKey(),T8.encode(t))),o=new Uint8Array(12+c.length);o.set(iv);o.set(c,12);return btoa(String.fromCharCode(...o))};
 const dec=async s=>{const b=Uint8Array.from(atob(s),x=>x.charCodeAt(0));return D8.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:b.slice(0,12)},await aesKey(),b.slice(12)))};
+const tf=(u,o={},ms=8000)=>fetch(u,{...o,signal:AbortSignal.timeout(ms)});
 const SCHEMA=[
 `create table if not exists users(id integer primary key,email text unique,hash text,salt text,role text default 'owner',plan text default 'free',created text default current_timestamp)`,
 `create table if not exists sessions(token text primary key,user_id integer,created integer)`,
@@ -31,7 +32,8 @@ const SCHEMA=[
 `create table if not exists rl(k text,t integer)`,
 `create index if not exists idx_msg_store on messages(store_id,id)`,
 `create index if not exists idx_items_store on items(store_id)`,
-`create index if not exists idx_rl on rl(k,t)`];
+`create index if not exists idx_rl on rl(k,t)`,
+`create index if not exists idx_msg_status on messages(status,created)`];
 async function init(){if(ready)return;await E.DB.batch(SCHEMA.map(s=>E.DB.prepare(s)));
 await E.DB.batch([`insert or ignore into meta values('created',datetime('now'))`,`insert or ignore into plans values('free','مجاني',50,'0')`,`insert or ignore into plans values('basic','أساسي',500,'15000 د.ع')`,`insert or ignore into plans values('pro','احترافي',3000,'40000 د.ع')`].map(s=>E.DB.prepare(s)));ready=true}
 const limited=async(k,n,ms)=>{const now=Date.now();await run('delete from rl where t<?',now-3600000);await run('insert into rl values(?,?)',k,now);return(await one('select count(*) n from rl where k=? and t>?',k,now-ms)).n>n};
@@ -42,24 +44,30 @@ if(!r.ok){console.error('mail fail',r.status,(await r.text()).slice(0,200));thro
 async function aiOnce(store,text){const items=await all('select * from items where store_id=?',store.id);
 const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+items.map(i=>i.kind=='product'?`منتج: ${i.title} | السعر: ${i.price} | ${i.body}`:`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
 const sys=`أنت مساعد ودود لمتجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). أجب بحرية وباختصار على التحية والشكر والأسئلة العامة والمحادثة العادية. أما المعلومات الخاصة بالمتجر (الأسعار، المنتجات، التوفر، التوصيل، الخصومات، الضمان، المواعيد) فاعتمد فقط على المعلومات أدناه ولا تخترع شيئاً منها أبداً. إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات، أجب بكلمة ESCALATE فقط.\n\n${info}`;
-if(E.GEMINI_API_KEY){const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:[{role:'user',parts:[{text}]}]})});
+if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:[{role:'user',parts:[{text}]}]})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return(j.candidates?.[0]?.content?.parts?.[0]?.text||'ESCALATE').trim()}
-const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:text}]})});
+const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:400,system:sys,messages:[{role:'user',content:text}]})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return j.content[0].text.trim()}
-async function ai(store,text){for(let i=0;;i++){try{return await aiOnce(store,text)}catch(e){if(i>=2||!/demand|overload|unavailable|429|503|quota/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,2500*(i+1)))}}}
-async function handle(store,sender,mid,text){const row=await one('select id from messages where mid=?',mid);
-try{if(!store.ai_enabled)return await run("update messages set status='ai_off' where id=?",row.id);
-if(E.LIVE!=='true'||!(E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await run("update messages set status='not_configured' where id=?",row.id);
+async function ai(store,text){for(let i=0;;i++){try{return await aiOnce(store,text)}catch(e){if(i>=2||!/demand|overload|unavailable|429|503|quota|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
+async function handle(store,sender,mid,text){
+const upd=(s,e)=>run('update messages set status=?,error=? where mid=?',s,e??null,mid);
+try{const c=await run("update messages set status='processing' where mid=? and status='pending'",mid);if(c.meta.changes!==1)return;
+if(!store.ai_enabled)return await upd('ai_off');
+if(E.LIVE!=='true'||!(E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
-if(await used(store.id)>=plan.monthly_limit)return await run("update messages set status='limit_reached' where id=?",row.id);
+if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
 let a=await ai(store,text),st='sent';if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}
-const r=await fetch('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:a.slice(0,900)}})});
+const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:a.slice(0,900)}})});
 if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300));
-await run('update messages set reply=?,status=? where id=?',a,st,row.id)}catch(e){await run("update messages set status='error',error=? where id=?",String(e.message).slice(0,500),row.id)}}
-async function processWebhook(b){try{for(const e of b.entry||[])for(const m of e.messaging||[]){if(!m.message?.text||m.message.is_echo)continue;
+await run('update messages set reply=?,status=?,error=null where mid=?',a,st,mid)}catch(e){try{await upd('error',String(e?.message||e).slice(0,500))}catch(x){console.error(x)}}}
+async function processWebhook(b){for(const e of b.entry||[])for(const m of e.messaging||[]){try{if(!m.message?.text||m.message.is_echo)continue;
 const st=await one('select * from stores where ig_user_id=?',String(e.id));if(!st)continue;
 const ins=await run('insert or ignore into messages(store_id,mid,sender,text,status) values(?,?,?,?,?)',st.id,m.message.mid,m.sender.id,m.message.text,'pending');
-if(ins.meta.changes)await handle(st,m.sender.id,m.message.mid,m.message.text)}}catch(e){console.error('webhook',e)}}
+if(ins.meta.changes)await handle(st,m.sender.id,m.message.mid,m.message.text)}catch(err){console.error('webhook',err)}}}
+async function sweep(){await run("update messages set status='error',error='تعذّرت المعالجة (انتهت المهلة)' where status='processing' and created<=datetime('now','-5 minutes')");
+await run("update messages set status='error',error='انتهت مهلة المعالجة' where status='pending' and created<datetime('now','-30 minutes')");
+const rows=await all("select mid,sender,text,store_id from messages where status='pending' and created<=datetime('now','-90 seconds') limit 5");
+for(const r of rows){const st=await one('select * from stores where id=?',r.store_id);if(st)await handle(st,r.sender,r.mid,r.text)}}
 const R={};const route=(m,p,f,o={})=>{R[m+' '+p]={f,...o}};
 const login=async(c,id)=>{const t=rhex(32);await run('insert into sessions values(?,?,?)',t,id,Date.now());c.cookie=`sid=${t}; HttpOnly; SameSite=Lax; Path=/`+(c.body.remember===false?'':'; Max-Age=2592000')+(E.PUBLIC_URL?.startsWith('https')?'; Secure':'');return{ok:1,token:t}};
 const okEmail=e=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
@@ -116,7 +124,8 @@ route('POST','/api/admin/plan',async c=>{await run('update plans set monthly_lim
 route('POST','/api/admin/user-plan',async c=>{await run('update users set plan=? where id=?',c.body.plan,c.body.id);return{ok:1}},{admin:1});
 route('GET','/api/admin/export',async c=>({exported:new Date().toISOString(),users:await all('select id,email,role,plan,created from users'),stores:await all('select id,user_id,name,description,hours,delivery,tone,ai_enabled,ig_user_id from stores'),items:await all('select * from items'),messages:await all('select * from messages')}),{admin:1});
 const page=(P)=>{const em=String(E.ADMIN_EMAIL||'').replace(/[<>&"]/g,'');return new Response(`<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;max-width:640px;margin:20px auto;padding:0 16px;line-height:1.9"><h1>${P?'سياسة الخصوصية':'حذف البيانات'}</h1>`+(P?`<p>تستخدم InstaPilot AI صلاحيات إنستغرام الرسمية لقراءة رسائل حساب المتجر المربوط والرد عليها نيابةً عن صاحب المتجر. نحفظ نص الرسائل والردود وسجل الأخطاء لعرضها لصاحب المتجر، ونخزّن رمز الوصول مشفراً. لا نبيع البيانات ولا نطلب كلمة مرور إنستغرام. قد تُرسل نصوص الرسائل إلى مزوّد الذكاء الاصطناعي لتوليد الرد. للاستفسار: ${em}</p>`:`<p>لحذف بياناتك راسلنا على ${em} من بريد حسابك مع ذكر اسم المتجر، وسنحذف الحساب والمحادثات ورمز الوصول خلال 30 يوماً. ويمكنك أيضاً إزالة التطبيق من إعدادات إنستغرام (التطبيقات والمواقع).</p>`),{headers:{'content-type':'text/html; charset=utf-8'}})};
-export default{async fetch(req,env,ctx){E=env;const url=new URL(req.url),p=url.pathname;
+export default{async scheduled(ev,env,ctx){E=env;ctx.waitUntil((async()=>{try{if(E.ENC_KEY){await init();await sweep()}}catch(e){console.error('cron',e)}})())},
+async fetch(req,env,ctx){E=env;const url=new URL(req.url),p=url.pathname;
 try{if(!E.ENC_KEY)return J({error:'ENC_KEY غير مضبوط'},500);await init();
 if(p=='/webhook/instagram'){
 if(req.method=='GET'){const t=url.searchParams.get('hub.verify_token');return t&&t===E.IG_VERIFY_TOKEN?new Response(url.searchParams.get('hub.challenge')):new Response('forbidden',{status:403})}
