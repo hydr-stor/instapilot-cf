@@ -24,26 +24,35 @@ const arD=s=>String(s??'').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(
 const parsePrice=s=>{const t=arD(s).replace(/[,٬،]/g,''),m=t.match(/\d+(\.\d+)?/);if(!m)return 0;let n=Math.round(+m[0]);if(n>0&&n<1000&&/[أا]لف/.test(t))n*=1000;return n};
 const fmt=n=>Number(n||0).toLocaleString('en-US');
 const turns=(h,t)=>{const o=[];for(const m of[...(h||[]),{role:'user',content:t}]){const c=String(m.content||'').trim();if(!c)continue;if(o.length&&o[o.length-1].role==m.role)o[o.length-1].content+='\n'+c;else o.push({role:m.role,content:c})}while(o.length&&o[0].role!='user')o.shift();return o};
-const hist=async(sid,sender,mid)=>(await all(`select text,reply from messages where store_id=? and sender=? and id<(select id from messages where mid=?) and created>=datetime('now','-1 day') order by id desc limit 8`,sid,sender,mid)).reverse().flatMap(r=>[{role:'user',content:r.text},...(r.reply?[{role:'assistant',content:r.reply}]:[])]);
+const hist=async(sid,sender,mid)=>(await all(`select text,reply from messages where store_id=? and sender=? and id<(select id from messages where mid=?) and created>=datetime('now','-1 day') order by id desc limit 8`,sid,sender,mid)).reverse().flatMap(r=>[{role:'user',content:String(r.text||'').slice(0,400)},...(r.reply?[{role:'assistant',content:String(r.reply).slice(0,500)}]:[])]);
 const bkParse=(a,m='BOOKING:')=>{const i=a.indexOf(m);if(i<0)return null;const s=a.indexOf('{',i);if(s<0)return{bad:1};let d=0;for(let k=s;k<a.length;k++){const c=a[k];if(c=='{')d++;else if(c=='}'&&--d==0){try{return{j:JSON.parse(a.slice(s,k+1))}}catch{return{bad:1}}}}return{bad:1}};
-async function mkBooking(store,sender,mid,j){const its=await all("select * from items where store_id=? and kind='product'",store.id),M=new Map();
-for(const x of Array.isArray(j.items)?j.items:[]){const it=its.find(i=>i.id==x?.id)||its.find(i=>x?.name&&i.title.includes(x.name)),q=Math.floor(+arD(x?.qty));if(!it||!(q>0)||q>999)continue;const l=M.get(it.id)||{id:it.id,name:it.title,qty:0,price:parsePrice(it.price)};l.qty+=q;M.set(it.id,l)}
-const lines=[...M.values()],addr=String(j.address||'').trim().slice(0,300),phone=arD(j.phone).replace(/[^\d+]/g,'');
+async function buildLines(sid,items){const its=await all("select * from items where store_id=? and kind='product'",sid),M=new Map();
+for(const x of Array.isArray(items)?items:[]){const it=its.find(i=>i.id==x?.id)||its.find(i=>x?.name&&i.title.includes(x.name)),q=Math.floor(+arD(x?.qty));if(!it||!(q>0)||q>999)continue;const l=M.get(it.id)||{id:it.id,name:it.title,qty:0,price:parsePrice(it.price)};l.qty+=q;M.set(it.id,l)}return[...M.values()]}
+async function mkBooking(store,sender,mid,j){const lines=await buildLines(store.id,j.items),addr=String(j.address||'').trim().slice(0,300),phone=arD(j.phone).replace(/[^\d+]/g,'');
 if(!lines.length||!addr||phone.replace(/\D/g,'').length<9)return null;
 const sub=lines.reduce((t,l)=>t+l.price*l.qty,0),total=sub+DELIVERY;
 await run('insert or ignore into bookings(store_id,mid,sender,address,phone,items,subtotal,delivery,total) values(?,?,?,?,?,?,?,?,?)',store.id,mid,sender,addr,phone,JSON.stringify(lines),sub,DELIVERY,total);
 return{lines,addr,phone,total,noprice:lines.some(l=>!l.price)}}
+
 const B=s=>T8.encode(s).length;
 const clip=(s,n=950)=>{s=String(s);if(B(s)<=n)return s;let o='';for(const ch of s){if(B(o+ch)>n-3)break;o+=ch}return o+'...'};
-const invoice=k=>{const head='تم تسجيل حجزك ✅\n',tail=`\nالتوصيل: ${fmt(DELIVERY)} د.ع\n`+(k.noprice?'المجموع الكلي: يتأكد من صاحب المتجر':`المجموع الكلي: ${fmt(k.total)} د.ع`)+`\nالعنوان: ${k.addr}\nالهاتف: ${k.phone}\nراح يتواصل وياك صاحب المتجر لتأكيد الحجز 🌷`,pr=l=>l.price?`${fmt(l.price)} د.ع`:'غير محدد',
-full=head+k.lines.map(l=>`• ${l.name} × ${l.qty} (سعر القطعة ${pr(l)})`).join('\n')+tail;if(B(full)<=950)return full;
-const mid=head+k.lines.map(l=>`• ${l.name} × ${l.qty} (${pr(l)})`).join('\n')+tail;if(B(mid)<=950)return mid;
-return clip(head+`عدد القطع: ${k.lines.reduce((t,l)=>t+l.qty,0)}`+tail)};
+const LINE='━━━━━━━━━━━━',money=n=>fmt(n)+' د.ع',KC=n=>String(n).replace(/\d/g,d=>d+'\uFE0F\u20E3');
+const ITEMS_P='🛒 شنو القطع اللي تريدها؟',ADDR_P='📍 اكتب عنوانك',PHONE_P='📞 اكتب رقم هاتفك';
+const SAFE_MSG='اكتب «المنتجات» لعرض القائمة والأسعار 🛍️',EDIT_MSG='تمام ✅ ما سجلت شي. اكتب «المنتجات» لعرض القائمة، أو اكتب طلبك من جديد 🌷',BLOCK_MSG='عذراً 🙏 ما كدرنا نكمل طلبك حالياً. تكدر تتواصل مع صاحب المتجر مباشرة.';
+const priceTxt=p=>parsePrice(p.price)?money(parsePrice(p.price)):(String(p.price||'').trim()||'السعر عند الاستفسار');
+const catalog=(ps,how=true)=>['🛍️ منتجاتنا\n'+LINE,...ps.slice(0,30).map((p,i)=>`${KC(i+1)} ${p.title}\n💰 ${priceTxt(p)}`),LINE+`\n🚚 التوصيل: ${money(DELIVERY)}`+(how?'\n✍️ للحجز اكتب رقم المنتج والعدد\nمثال: 1 × 2':'')].join('\n\n');
+const detail=(p,i)=>`${KC(i+1)} ${p.title}\n💰 السعر: ${priceTxt(p)}`+(p.body?`\n📝 ${String(p.body).slice(0,300)}`:'')+`\n${LINE}\n🚚 التوصيل: ${money(DELIVERY)}\n✍️ للحجز اكتب: ${i+1} × العدد`;
+const orderLines=ls=>ls.map(l=>`• ${l.name}\n   العدد: ${l.qty} | سعر القطعة: ${l.price?money(l.price):'غير محدد'}\n   المجموع: ${l.price?money(l.price*l.qty):'غير محدد'}`).join('\n');
+const totals=ls=>{const sub=ls.reduce((t,l)=>t+l.price*l.qty,0),np=ls.some(l=>!l.price);return LINE+`\n🛒 القطع: ${np?'يتأكد من صاحب المتجر':money(sub)}\n🚚 التوصيل: ${money(DELIVERY)}\n💵 المجموع الكلي: ${np?'يتأكد من صاحب المتجر':money(sub+DELIVERY)}`};
+const summary=(ls,a,p)=>`🧾 ملخص طلبك\n${LINE}\n${orderLines(ls)}\n${totals(ls)}\n\n📍 ${a}\n📞 ${p}\n\n✅ اكتب «تأكيد» لتثبيت الحجز\n✏️ أو «تعديل» لإلغاء الطلب وإعادته`;
+const invoice=k=>`✅ تم تسجيل حجزك\n${LINE}\n${orderLines(k.lines)}\n${totals(k.lines)}\n\n📍 ${k.addr}\n📞 ${k.phone}\n\n🌷 راح يتواصل وياك صاحب المتجر لتأكيد الحجز`;
+const chunks=(t,n=950)=>{const out=[];let cur='';const add=u=>{const nx=cur?cur+'\n\n'+u:u;if(B(nx)<=n)cur=nx;else{if(cur)out.push(cur);cur=u}};
+for(const u of String(t).split('\n\n')){if(B(u)<=n)add(u);else for(const ln of u.split('\n')){const nx=cur?cur+'\n'+ln:ln;if(B(nx)<=n)cur=nx;else{if(cur)out.push(cur);cur=B(ln)<=n?ln:clip(ln,n)}}}if(cur)out.push(cur);return out.slice(0,6)};
 const itemsText=b=>{try{return JSON.parse(b.items).map(l=>`${l.name} × ${l.qty}`).join('، ')}catch{return''}};
 const nrm=s=>arD(s).replace(/[\u064B-\u065F\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[کگ]/g,'ك').toLowerCase();
 const CANCEL_RE=/لغ[يا]|كنسل|cancel|ماريد|مابي|ما ?ابي|ما ?اريد|مو محتاج|غيرت رايي|بدلت رايي/,STRONG_RE=/لغ[يا]|كنسل|cancel/,NEG_RE=/(^|\s)(ما|لا|مو)(\s|$)|ماريد|مابي/,Q_RE=/[؟?]|(^|\s)(هل|شلون|كيف|ممكن|اكدر|اقدر|شنو|ليش|وين|متي|ايمتي)(\s|$)/,CLAIM_RE=/تم\s+الغ|تم\s+كنسل|الغيت|الغينا/;
 const clsSys=act=>`أنت مصنّف رسائل لمتجر. هذي حجوزات الزبون القابلة للإلغاء:\n${act.map(b=>`#${b.id} | ${itemsText(b)}`).join('\n')}\n\nاقرأ رسالة الزبون الأخيرة (مع المحادثة السابقة) وأجب بكلمة واحدة فقط بدون أي شرح:\nNO = ما يطلب إلغاء حجز الآن (سؤال عام، أو يسأل كيف يلغي، أو تراجع عن الإلغاء، أو يريد تعديل الحجز).\nYES:رقم = يطلب إلغاء حجز بوضوح (مثال YES:12). إذا عنده حجز واحد فقط اكتب رقمه.\nASK = يطلب الإلغاء وعنده أكثر من حجز ولم يحدد أيهم بالرقم أو بذكر قطعه.`;
-const askMsg=act=>clip('عندك أكثر من حجز، أي واحد تريد ألغيه؟\n'+act.map(b=>`#${b.id}: ${itemsText(b)}`).join('\n')+'\nاكتبلي رقم الحجز 🌷');
+const askMsg=act=>'❓ عندك أكثر من حجز، أي واحد تريد ألغيه؟\n'+act.map(b=>`#${b.id}: ${itemsText(b)}`).join('\n')+'\nاكتبلي رقم الحجز 🌷';
 const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 async function vapid(){let r=await one("select v from meta where k='vapid'");
 if(!r){const kp=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);await run("insert or ignore into meta values('vapid',?)",await enc(JSON.stringify({pub:b64u(await crypto.subtle.exportKey('raw',kp.publicKey)),jwk:await crypto.subtle.exportKey('jwk',kp.privateKey)})));r=await one("select v from meta where k='vapid'")}
@@ -53,8 +62,8 @@ return{jwt:h+'.'+p+'.'+b64u(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256
 async function sendPush(uid){let sent=0,failed=0;for(const s of await all('select * from push_subs where user_id=?',uid)){try{const{jwt,pub}=await vapidJwt(new URL(s.endpoint).origin),r=await tf(s.endpoint,{method:'POST',headers:{TTL:'86400',Urgency:'high',Authorization:`vapid t=${jwt}, k=${pub}`}});
 if(r.ok)sent++;else{failed++;console.error('push',r.status,(await r.text()).slice(0,200));if(r.status==404||r.status==410)await run('delete from push_subs where endpoint=?',s.endpoint)}}catch(e){failed++;console.error('push',e)}}return{sent,failed}}
 async function notify(store,title,body){try{await run('insert into notifs(store_id,title,body,url) values(?,?,?,?)',store.id,title,body,'/#/bookings');return await sendPush(store.user_id)}catch(e){console.error('notify',e);return{sent:0,failed:1}}}
-async function cancelBooking(store,sender,j){const id=Math.floor(+String(arD(j?.id)).replace(/\D/g,''));if(!(id>0))return null;const b=await one("select * from bookings where id=? and store_id=? and sender=? and status in('new','confirmed')",id,store.id,sender);if(!b)return null;await run("update bookings set status='cancelled',by_customer=1 where id=? and status in('new','confirmed')",b.id);await notify(store,'حجز ملغي ❌','ألغى الزبون حجزه: '+itemsText(b)+' — '+fmt(b.total)+' د.ع'+(b.phone?' ('+b.phone+')':''));return b}
-const cancelMsg=b=>{let t='';try{t=JSON.parse(b.items).map(l=>`• ${l.name} × ${l.qty}`).join('\n')}catch{}return clip('تم إلغاء حجزك ✅'+(t?'\n'+t:'')+'\nإذا احتجت شي ثاني أني حاضر 🌷')};
+async function cancelBooking(store,sender,j){const id=Math.floor(+String(arD(j?.id)).replace(/\D/g,''));if(!(id>0))return null;const b=await one("select * from bookings where id=? and store_id=? and sender=? and status in('new','confirmed')",id,store.id,sender);if(!b)return null;await run("update bookings set status='cancelled',by_customer=1 where id=? and status in('new','confirmed')",b.id);await ev(store.id,sender,'cancel');await notify(store,'إلغاء حجز','ألغى الزبون حجزه'+(b.phone?' ('+b.phone+')':''));return b}
+const cancelMsg=b=>{const t=itemsText(b);return '✅ تم إلغاء حجزك'+(t?'\n'+LINE+'\n'+t.split('، ').map(x=>'• '+x).join('\n'):'')+'\n\n🌷 إذا احتجت شي ثاني أني حاضر'};
 async function igSend(store,to,text){const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:to},message:{text:clip(text)}})});if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300))}
 const SCHEMA=[
 `create table if not exists users(id integer primary key,email text unique,hash text,salt text,role text default 'owner',plan text default 'free',created text default current_timestamp)`,
@@ -71,6 +80,11 @@ const SCHEMA=[
 `create index if not exists idx_bk_store on bookings(store_id,id)`,
 `create table if not exists notifs(id integer primary key,store_id integer,title text,body text,url text,created text default current_timestamp)`,
 `create table if not exists push_subs(endpoint text primary key,user_id integer,sub text,created text default current_timestamp)`,
+`create table if not exists drafts(store_id integer,sender text,data text,updated text default current_timestamp,primary key(store_id,sender))`,
+`create table if not exists blocked(store_id integer,sender text,reason text,created text default current_timestamp,primary key(store_id,sender))`,
+`create table if not exists events(id integer primary key,store_id integer,sender text,kind text,created text default current_timestamp)`,
+`create index if not exists idx_ev on events(store_id,sender,kind,id)`,
+`create table if not exists notif_seen(nid integer,endpoint text,primary key(nid,endpoint))`,
 `create index if not exists idx_msg_store on messages(store_id,id)`,
 `create index if not exists idx_items_store on items(store_id)`,
 `create index if not exists idx_rl on rl(k,t)`,
@@ -83,40 +97,112 @@ const used=async sid=>(await one(`select count(*) n from messages where store_id
 async function mail(to,subject,html){if(!E.BREVO_API_KEY||!E.MAIL_FROM)throw[503,'إرسال البريد غير مُعدّ بعد'];
 const r=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'content-type':'application/json','api-key':E.BREVO_API_KEY,accept:'application/json'},body:JSON.stringify({sender:{name:'InstaPilot AI',email:E.MAIL_FROM},to:[{email:to}],subject,htmlContent:html})});
 if(!r.ok){console.error('mail fail',r.status,(await r.text()).slice(0,200));throw[502,'تعذّر إرسال الرمز، حاول لاحقاً']}}
-async function llm(sys,msgs,max=400){
-if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},...msgs],max_tokens:max});return String(r.response||r.choices?.[0]?.message?.content||'').trim()}
-if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:msgs.map(m=>({role:m.role=='assistant'?'model':'user',parts:[{text:m.content}]}))})});
+async function llm(sys,msgs,max=400,temp){const T=temp!=null;
+if(E.AI_PROVIDER==='cf'){const r=await E.AI.run(E.AI_MODEL,{messages:[{role:'system',content:sys},...msgs],max_tokens:max,...(T?{temperature:temp}:{})});return String(r.response||r.choices?.[0]?.message?.content||'').trim()}
+if(E.GEMINI_API_KEY){const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${E.AI_MODEL||'gemini-3.8-flash'}:generateContent`,{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':E.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:sys}]},contents:msgs.map(m=>({role:m.role=='assistant'?'model':'user',parts:[{text:m.content}]})),...(T?{generationConfig:{temperature:temp}}:{})})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return(j.candidates?.[0]?.content?.parts?.[0]?.text||'').trim()}
-const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:max,system:sys,messages:msgs})});
+const r=await tf('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':E.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:E.AI_MODEL||'claude-sonnet-4-6',max_tokens:max,system:sys,messages:msgs,...(T?{temperature:temp}:{})})});
 const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'AI error');return String(j.content?.[0]?.text||'').trim()}
-async function aiOnce(store,text,h,bks){const items=await all('select * from items where store_id=?',store.id);
-const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+items.map(i=>i.kind=='product'?`منتج [#${i.id}]: ${i.title} | السعر: ${i.price} | ${i.body}`:`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
-const SL={new:'قيد المراجعة',confirmed:'مؤكد',delivered:'تم التسليم',cancelled:'ملغي'},bk=(bks||[]).length?'\n\nحجوزات هذا الزبون:\n'+bks.map(b=>{let t='';try{t=JSON.parse(b.items).map(l=>`${l.name} × ${l.qty}`).join('، ')}catch{}return`#${b.id} | ${SL[b.status]||b.status} | ${t}`}).join('\n'):'';
-const sys=`أنت مساعد ودود لمتجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). أجب بحرية وباختصار على التحية والشكر والأسئلة العامة والمحادثة العادية. أما المعلومات الخاصة بالمتجر (الأسعار، المنتجات، التوفر، التوصيل، الخصومات، الضمان، المواعيد) فاعتمد فقط على المعلومات أدناه ولا تخترع شيئاً منها أبداً. إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات، أجب بكلمة ESCALATE فقط.\n\nالحجز: إذا طلب الزبون يحجز أو يطلب منتجات، اجمع منه 3 أشياء: المنتجات مع عدد كل منتج، والعنوان، ورقم هاتفه. ارجع لمحادثتكم السابقة لتعرف شنو ذكر، واسأله عن الناقص فقط وباختصار. لا تحسب مجاميع ولا تذكر سعر التوصيل ولا المجموع، النظام يرسل الفاتورة بنفسه. لما تكتمل الثلاثة وهو يريد الحجز بوضوح، يكون ردّك كله سطراً واحداً فقط بهذا الشكل بالضبط: BOOKING:{"items":[{"id":1,"qty":2}],"address":"العنوان","phone":"07701234567"} حيث id هو رقم المنتج من القائمة (الرقم بعد #) ولا تستخدم غير منتجات القائمة. لا تكتب كلمة BOOKING بأي حالة ثانية. الإلغاء: إذا طلب الزبون يلغي حجزه (انظر قائمة حجوزاته بآخر المعلومات)، وكان عنده حجز واحد فقط حالته قيد المراجعة أو مؤكد، يكون ردّك كله سطراً واحداً فقط: CANCEL:{"id":رقم_الحجز} (الرقم بعد #). وإذا عنده أكثر من حجز قابل للإلغاء اسأله أي واحد منهم بذكر قطعه ولا تلغي قبل ما يحدد. وإذا حجزه تم تسليمه أو ملغي أصلاً أخبره بذلك بدون CANCEL. لا تكتب كلمة CANCEL بأي حالة ثانية. ممنوع تقول للزبون إنك ألغيت أو أكدت حجزاً بنفسك، الإلغاء يتم من النظام فقط؛ إذا أراد الإلغاء اطلب منه يكتب: الغي حجزي.\n\n${info}${bk}`;
-return(await llm(sys,turns(h,text),400))||'ESCALATE'}
+async function aiOnce(store,text,h,bks){const items=await all('select * from items where store_id=?',store.id),prods=items.filter(i=>i.kind=='product'),faq=items.filter(i=>i.kind!='product');
+const info=`المتجر: ${store.name}\n${store.description}\nالدوام: ${store.hours}\nالتوصيل: ${store.delivery}\n`+(prods.length?`المنتجات المتوفرة (أسماء فقط): ${prods.map(i=>i.title).join('، ')}\n`:'')+faq.map(i=>`سؤال: ${i.title} | جواب: ${i.body}`).join('\n');
+const SL={new:'قيد المراجعة',confirmed:'مؤكد',delivered:'تم التسليم',cancelled:'ملغي'},bk=(bks||[]).length?'\n\nحجوزات هذا الزبون:\n'+bks.map(b=>`#${b.id} | ${SL[b.status]||b.status} | ${itemsText(b)}`).join('\n'):'';
+const sys=`أنت مساعد متجر على إنستغرام. افهم اللهجة العراقية وأجب بنفس الأسلوب (${store.tone}). اقرأ المحادثة السابقة كاملة وافهم قصد الزبون قبل ما ترد، ولا تكرر سؤالاً سبق وأجاب عليه.
+أسلوب الرد: قصير ومرتب (سطرين أو ثلاثة كحد أقصى)، مهذب ومحترف وبدون حشو، وبحد أقصى إيموجي واحد أو اثنين.
+اعتمد فقط على المعلومات المكتوبة أدناه. ممنوع تخترع أو تخمّن أي منتج أو سعر أو عنوان أو رقم هاتف أو موعد أو خصم أو ضمان. ممنوع تذكر أي سعر أو مبلغ نهائياً.
+إذا أراد الزبون يعرف المنتجات أو الأسعار أو يحجز، قل له يكتب «المنتجات» لعرض القائمة أو يكتب طلبه (اسم المنتج والعدد) والنظام يتولى الباقي.
+إذا سأل عن حجزه أخبره بحالته من قائمة حجوزاته فقط. لا تقل أبداً إنك سجلت أو ألغيت أو أكدت حجزاً، هذا يتم من النظام فقط.
+إذا سُئلت عن شيء خاص بالمتجر وليس في المعلومات أجب بكلمة ESCALATE فقط.
+
+${info}${bk}`;
+const r=(await llm(sys,turns(h,text),300,0.3))||'ESCALATE';
+const ok=arD([...(h||[]).filter(m=>m.role=='user').map(m=>m.content),text,store.description,store.hours,store.delivery,...faq.map(i=>i.title+' '+i.body),...(bks||[]).map(b=>b.id)].join(' ')).replace(/[,٬]/g,'');
+return(arD(r).replace(/[,٬]/g,'').match(/\d{3,}/g)||[]).some(x=>!ok.includes(x))?SAFE_MSG:r}
 async function ai(store,text,h,bks){for(let i=0;;i++){try{return await aiOnce(store,text,h,bks)}catch(e){if(i>=2||!/demand|overload|unavailable|503|timeout|aborted/i.test(e.message))throw e;await new Promise(r=>setTimeout(r,1500*(i+1)))}}}
+const ev=(sid,sender,kind)=>run('insert into events(store_id,sender,kind) values(?,?,?)',sid,sender,kind);
+const getDraft=async(sid,sender)=>{const r=await one("select data from drafts where store_id=? and sender=? and updated>=datetime('now','-1 day')",sid,sender);try{return r?JSON.parse(r.data):null}catch{return null}};
+const putDraft=(sid,sender,d)=>run("insert or replace into drafts(store_id,sender,data,updated) values(?,?,?,datetime('now'))",sid,sender,JSON.stringify(d));
+const delDraft=(sid,sender)=>run('delete from drafts where store_id=? and sender=?',sid,sender);
+const GATE_RE=/حجز|احجز|اطلب|طلب|اريد|ابي|ابغي|بدي|اخذ|خذ|اشتري|سعر|اسعار|شكد|بكم|كم|قائمه|منتج|متوفر|موجود|عندكم|\d/,CATALOG_RE=/^(ال)?(منتجات|قائمه|منيو|اسعار|كتالوج|menu|catalog|prices?)\s*[؟?!.]*$/,CONFIRM_RE=/^(تاكيد|اكد|اؤكد|نعم|اي|ايوه|ايوا|تمام|موافق|ثبت|ثبتها|اوكي|اوك|ok|okay|yes|يلا|ماشي)(\s|$)/,EDIT_RE=/^(تعديل|عدل|عدله|لا|كلا|غير|الغ|لغ|الغي|ماريد|ما اريد|مو صحيح|خطا|غلط)(\s|$)/;
+const phoneIn=t=>{const c=arD(t).replace(/(?<=\d)[\s-]+(?=\d)/g,''),m=c.match(/(?:\+?964|0)7\d{9}/)||c.match(/\+?\d{9,15}/);return m?m[0]:''};
+const wordsOf=s=>nrm(s).split(/[^\p{L}\p{N}]+/u).filter(w=>w.length>=2);
+const addrOK=(a,blob)=>{const w=wordsOf(a),B2=new Set(wordsOf(blob));return w.length>0&&!/^[\d\s+-]+$/.test(a)&&w.filter(x=>B2.has(x)).length/w.length>=0.7};
+const rtSys=ps=>`أنت محلّل رسائل لمتجر. استخرج المعلومات من رسالة الزبون الأخيرة فقط (المحادثة السابقة للفهم فقط) ولا تخترع أي معلومة.
+المنتجات (الرقم | الاسم):
+${ps.slice(0,30).map((p,i)=>`${i+1} | ${p.title}`).join('\n')}
+
+أخرج JSON فقط بسطر واحد وبدون أي نص آخر:
+{"intent":"catalog|order|confirm|deny|chat","items":[{"n":1,"qty":2}],"address":""}
+intent:
+catalog = يسأل عن المنتجات أو الأسعار أو المتوفر أو تفاصيل منتج.
+order = يريد يحجز أو يطلب أو يعطي معلومات طلب (قطع أو عدد أو عنوان).
+confirm = يؤكد الطلب المعروض عليه.
+deny = يرفض الطلب المعروض أو يريد تعديله.
+chat = غير ذلك (تحية، شكر، سؤال عام).
+القواعد:
+- items: فقط القطع التي كتبها الزبون باسمها أو اختارها برقمها. n هو رقم المنتج من القائمة. qty هو العدد (إذا لم يذكر عدداً اكتب 1).
+- إذا كتب رقماً قبل اسم المنتج فهو العدد: "2 قميص" تعني qty=2. وإذا كتب "رقم 3" أو "3 × 2" فالأول رقم المنتج والثاني العدد.
+- address: العنوان فقط إذا كتبه الزبون بنفس كلماته، وإلا اتركه فارغاً.
+- لا تخمّن ولا تضف شيئاً لم يكتبه الزبون.`;
+async function routeAI(ps,h,text){let v='';try{v=await llm(rtSys(ps),turns(h,text),150,0)}catch(e){console.error('router',e);return null}console.log('router',v);const b=bkParse(v,'{');return b?.j&&typeof b.j=='object'?b.j:null}
+async function doConfirm(store,sender,mid,d){const k=await mkBooking(store,sender,mid,{items:d.items,address:d.address,phone:d.phone});await delDraft(store.id,sender);if(!k)return'عفواً صار خلل بتسجيل الحجز 🙏 اكتب طلبك من جديد.';await ev(store.id,sender,'done');return invoice(k)}
+async function orderFlow(store,sender,mid,text,h,d,ps,n,last){
+if(CATALOG_RE.test(n))return catalog(ps);
+const asked=last.includes(ADDR_P)?'a':last.includes(PHONE_P)?'p':last.includes(ITEMS_P)?'i':'';
+let r=await routeAI(ps,h,text);if(!r){if(!asked)return null;r={intent:'order',items:[],address:''}}
+const it=String(r.intent||'chat').toLowerCase(),ri=Array.isArray(r.items)?r.items:[];
+if(it=='catalog'){const k=ri.map(x=>Math.floor(+arD(x?.n))).filter(x=>x>=1&&x<=ps.length);return k.length==1?detail(ps[k[0]-1],k[0]-1):catalog(ps)}
+if(it=='deny'&&d){await delDraft(store.id,sender);return EDIT_MSG}
+if(it=='confirm'&&d?.stage=='confirm')return await doConfirm(store,sender,mid,d);
+if(!(it=='order'||(asked&&it=='chat'&&!Q_RE.test(n))))return null;
+const nd=d?{...d,items:d.items.map(x=>({...x}))}:{items:[],address:'',phone:'',stage:'collect'},blob=nrm([...h.filter(m=>m.role=='user').map(m=>m.content),text].join(' '));let got=false,gotItem=false;
+for(const x of ri){const k=Math.floor(+arD(x?.n)),q=Math.floor(+arD(x?.qty??1))||1;if(!(k>=1&&k<=ps.length)||q<1||q>99)continue;const p=ps[k-1],e=nd.items.find(i=>i.id==p.id);if(e)e.qty=q;else nd.items.push({id:p.id,qty:q});got=true;gotItem=true}
+const ph=phoneIn(text);if(ph){nd.phone=ph;got=true}
+const ad=String(r.address||'').trim();
+if(ad&&addrOK(ad,blob)){nd.address=ad.slice(0,200);got=true}
+else if(asked=='a'&&!gotItem){const c=text.replace(/\+?[\d٠-٩][\d٠-٩\s-]{7,}/g,' ').replace(/\s+/g,' ').trim();if(c.length>=5&&!/^[\d\s+-]+$/.test(c)){nd.address=c.slice(0,200);got=true}}
+if(!d&&got)await ev(store.id,sender,'draft');
+const lines=nd.items.length?await buildLines(store.id,nd.items):[];
+if(!lines.length){if(got)await putDraft(store.id,sender,{...nd,items:[],stage:'collect'});return ITEMS_P+' اكتب رقم المنتج والعدد (مثال: 1 × 2)\n\n'+catalog(ps,false)}
+const ok=lines.map(l=>`${l.name} × ${l.qty}`).join('، ');
+if(!nd.address){nd.stage='collect';await putDraft(store.id,sender,nd);return ADDR_P+' (المحافظة - المنطقة - أقرب نقطة دالة)\n\n✅ المسجّل لحد الآن: '+ok}
+if(!nd.phone){nd.stage='collect';await putDraft(store.id,sender,nd);return PHONE_P+' للتواصل\n\n✅ المسجّل لحد الآن: '+ok+'\n📍 '+nd.address}
+nd.stage='confirm';await putDraft(store.id,sender,nd);return summary(lines,nd.address,nd.phone)}
+async function abuse(store,sender){const r=(await one("select max(created) t from events where store_id=? and sender=? and kind='reset'",store.id,sender))?.t||'1970-01-01 00:00:00';
+const q=async(k,w)=>(await one("select count(*) n from events where store_id=? and sender=? and kind=? and created>=datetime('now',?) and created>?",store.id,sender,k,w,r)).n,mc=async w=>(await one("select count(*) n from messages where store_id=? and sender=? and status!='blocked' and created>=datetime('now',?) and created>?",store.id,sender,w,r)).n;
+if(await q('cancel','-7 days')>=3)return'كثرة إلغاء الحجوزات';
+if(await q('draft','-1 day')>=4&&await q('done','-1 day')==0)return'يبدأ حجوزات ولا يكملها';
+if(await mc('-1 hour')>40||await mc('-1 day')>150)return'رسائل كثيرة جداً';
+return''}
+async function igReply(store,to,text){for(const p of chunks(text))await igSend(store,to,p)}
 async function handle(store,sender,mid,text){
 const upd=(s,e)=>run('update messages set status=?,error=? where mid=?',s,e??null,mid);
 try{const c=await run("update messages set status='processing' where mid=? and status='pending'",mid);if(c.meta.changes!==1)return;
 if(!store.ai_enabled)return await upd('ai_off');
 if(E.LIVE!=='true'||!(E.AI||E.GEMINI_API_KEY||E.ANTHROPIC_API_KEY)||!store.ig_token)return await upd('not_configured');
+if(await one('select 1 x from blocked where store_id=? and sender=?',store.id,sender))return await upd('blocked');
 const plan=await one('select * from plans where id=(select plan from users where id=?)',store.user_id);
 if(await used(store.id)>=plan.monthly_limit)return await upd('limit_reached');
-const h=await hist(store.id,sender,mid),bks=await all("select id,items,status from bookings where store_id=? and sender=? and created>=datetime('now','-30 days') order by id desc limit 5",store.id,sender),act=bks.filter(b=>b.status=='new'||b.status=='confirmed'),n=nrm(text),ask0=h.length&&h[h.length-1].role=='assistant'&&h[h.length-1].content.startsWith('عندك أكثر من حجز');
-let a=null,st='sent';
-if(act.length&&(CANCEL_RE.test(n)||ask0)){let id=0,ask=false;
+const why=await abuse(store,sender);
+if(why){await run('insert or ignore into blocked(store_id,sender,reason) values(?,?,?)',store.id,sender,why);await delDraft(store.id,sender);await igReply(store,sender,BLOCK_MSG);await run('update messages set reply=?,status=?,error=null where mid=?',BLOCK_MSG,'sent',mid);return}
+const h=await hist(store.id,sender,mid),bks=await all("select id,items,status from bookings where store_id=? and sender=? and created>=datetime('now','-30 days') order by id desc limit 5",store.id,sender),act=bks.filter(b=>b.status=='new'||b.status=='confirmed'),n=nrm(text),ps=await all("select * from items where store_id=? and kind='product' order by id",store.id),d=await getDraft(store.id,sender);
+const last=h.length&&h[h.length-1].role=='assistant'?h[h.length-1].content:'',ask0=last.includes('أي واحد تريد ألغيه');
+let a=null,st='sent',cancelTalk=false;
+if(d?.stage=='confirm'&&n.length<=25&&CONFIRM_RE.test(n)&&!Q_RE.test(n))a=await doConfirm(store,sender,mid,d);
+else if(d?.stage=='confirm'&&n.length<=14&&EDIT_RE.test(n)&&!/حجز|طلب/.test(n)){await delDraft(store.id,sender);a=EDIT_MSG}
+if(a===null&&act.length&&(CANCEL_RE.test(n)||ask0)){cancelTalk=true;let id=0,ask=false;
 if(act.length==1&&STRONG_RE.test(n)&&!NEG_RE.test(n)&&!Q_RE.test(n)&&n.length<=60)id=act[0].id;
-else{let v='';try{v=await llm(clsSys(act),turns(h,text),60)}catch(e){console.error('cls',e)}console.log('cancel-check',v);const m=v.match(/\bYES\b[^\d]{0,6}(\d+)|\bASK\b|\bNO\b/i);if(m){if(m[1])id=act.length==1?act[0].id:+m[1];else if(/ASK/i.test(m[0]))ask=true}}
+else{let v='';try{v=await llm(clsSys(act),turns(h,text),60,0)}catch(e){console.error('cls',e)}console.log('cancel-check',v);const m=v.match(/\bYES\b[^\d]{0,6}(\d+)|\bASK\b|\bNO\b/i);if(m){if(m[1])id=act.length==1?act[0].id:+m[1];else if(/ASK/i.test(m[0]))ask=true}}
 if(id){const k=await cancelBooking(store,sender,{id});if(k)a=cancelMsg(k)}else if(ask&&act.length>1)a=askMsg(act)}
-if(a===null){a=await ai(store,text,h,bks);if(a.includes('BOOKING:')){const b=bkParse(a),k=b?.j&&await mkBooking(store,sender,mid,b.j);a=k?invoice(k):'عفواً ما كدرت أسجل الحجز 🙏 تكدر تكتبلي المنتجات وعددها والعنوان ورقم هاتفك؟'}else if(a.includes('CANCEL:')){const b=bkParse(a,'CANCEL:'),k=b?.j&&await cancelBooking(store,sender,b.j);a=k?cancelMsg(k):'ما لكيت حجز تكدر ألغيه 🙏 إذا تقصد حجز معين اكتبلي قطعه.'}else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}else if(act.length&&CLAIM_RE.test(nrm(a)))a='حتى ألغي حجزك اكتبلي: الغي حجزي 🙏'}
-const r=await tf('https://graph.instagram.com/v21.0/me/messages',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+await dec(store.ig_token)},body:JSON.stringify({recipient:{id:sender},message:{text:clip(a)}})});
-if(!r.ok)throw new Error('Send failed: '+(await r.text()).slice(0,300));
+if(a===null&&ps.length&&!cancelTalk&&(d||CATALOG_RE.test(n)||GATE_RE.test(n)||last.includes(ITEMS_P)))a=await orderFlow(store,sender,mid,text,h,d,ps,n,last);
+if(a===null){a=await ai(store,text,h,bks);if(/BOOKING:|CANCEL:/.test(a))a=SAFE_MSG;else if(a.includes('ESCALATE')){a='تمام 🌷 راح أحوّل سؤالك لصاحب المتجر ويرد عليك بأقرب وقت.';st='escalated'}else if(act.length&&CLAIM_RE.test(nrm(a)))a='حتى ألغي حجزك اكتبلي: الغي حجزي 🙏'}
+await igReply(store,sender,a);
 await run('update messages set reply=?,status=?,error=null where mid=?',a,st,mid)}catch(e){try{await upd('error',String(e?.message||e).slice(0,500))}catch(x){console.error(x)}}}
+
 async function processWebhook(b){for(const e of b.entry||[])for(const m of e.messaging||[]){try{if(!m.message?.text||m.message.is_echo)continue;
 const st=await one('select * from stores where ig_user_id=?',String(e.id));if(!st)continue;
 const ins=await run('insert or ignore into messages(store_id,mid,sender,text,status) values(?,?,?,?,?)',st.id,m.message.mid,m.sender.id,m.message.text,'pending');
 if(ins.meta.changes)await handle(st,m.sender.id,m.message.mid,m.message.text)}catch(err){console.error('webhook',err)}}}
-async function sweep(){await run("delete from notifs where created<datetime('now','-1 day')");
+async function sweep(){await run("delete from notifs where created<datetime('now','-1 day')");await run('delete from notif_seen where nid not in (select id from notifs)');await run("delete from drafts where updated<datetime('now','-2 days')");await run("delete from events where created<datetime('now','-14 days') and kind!='reset'");
 await run("update messages set status='error',error='تعذّرت المعالجة (انتهت المهلة)' where status='processing' and created<=datetime('now','-5 minutes')");
 await run("update messages set status='error',error='انتهت مهلة المعالجة' where status='pending' and created<datetime('now','-30 minutes')");
 const rows=await all("select mid,sender,text,store_id from messages where status='pending' and created<=datetime('now','-90 seconds') limit 5");
@@ -161,7 +247,10 @@ route('GET','/api/items',c=>all('select * from items where store_id=?',c.store.i
 route('POST','/api/items',async c=>{const b=c.body;if(!['product','faq'].includes(b.kind)||!b.title)throw[400,'بيانات غير صحيحة'];await run('insert into items(store_id,kind,title,price,body) values(?,?,?,?,?)',c.store.id,b.kind,b.title,b.price||'',b.body||'');return{ok:1}});
 route('POST','/api/items/delete',async c=>{await run('delete from items where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/messages',c=>all('select * from messages where store_id=? order by id desc limit 100',c.store.id));
-route('GET','/api/bookings',c=>all('select * from bookings where store_id=? order by id desc limit 200',c.store.id));
+route('GET','/api/bookings',c=>all('select b.*,exists(select 1 from blocked x where x.store_id=b.store_id and x.sender=b.sender) blocked from bookings b where b.store_id=? order by b.id desc limit 200',c.store.id));
+route('GET','/api/blocked',c=>all('select b.sender,b.reason,b.created,(select phone from bookings k where k.store_id=b.store_id and k.sender=b.sender order by k.id desc limit 1) phone from blocked b where b.store_id=? order by b.created desc',c.store.id));
+route('POST','/api/blocked/add',async c=>{const b=await one('select sender from bookings where id=? and store_id=?',c.body.booking_id,c.store.id);if(!b)throw[404,'الحجز غير موجود'];await run('insert or ignore into blocked(store_id,sender,reason) values(?,?,?)',c.store.id,b.sender,'حظر يدوي');return{ok:1}});
+route('POST','/api/blocked/remove',async c=>{const s=String(c.body.sender||'');await run('delete from blocked where store_id=? and sender=?',c.store.id,s);await ev(c.store.id,s,'reset');return{ok:1}});
 route('POST','/api/bookings/status',async c=>{const st=c.body.status;if(!['new','confirmed','delivered','cancelled'].includes(st))throw[400,'حالة غير صحيحة'];
 const b=await one('select * from bookings where id=? and store_id=?',c.body.id,c.store.id);if(!b)throw[404,'الحجز غير موجود'];
 await run('update bookings set status=?,by_customer=0 where id=?',st,b.id);const out={ok:1};
@@ -169,10 +258,12 @@ if(st=='confirmed'&&b.status!='confirmed'&&!b.notified){if(!c.store.ig_token)out
 return out});
 route('POST','/api/bookings/delete',async c=>{await run('delete from bookings where id=? and store_id=?',c.body.id,c.store.id);return{ok:1}});
 route('GET','/api/push/key',async()=>({key:(await vapid()).pub}));
-route('POST','/api/push/subscribe',async c=>{const s=c.body;if(!/^https:\/\//.test(String(s?.endpoint||'')))throw[400,'اشتراك غير صالح'];await run('insert or replace into push_subs(endpoint,user_id,sub) values(?,?,?)',s.endpoint,c.user.id,JSON.stringify(s));return{ok:1}});
+route('POST','/api/push/subscribe',async c=>{const s=c.body;if(!/^https:\/\//.test(String(s?.endpoint||'')))throw[400,'اشتراك غير صالح'];await run('insert or replace into push_subs(endpoint,user_id,sub) values(?,?,?)',s.endpoint,c.user.id,JSON.stringify(s));await run('insert or ignore into notif_seen(nid,endpoint) select id,? from notifs where store_id=?',s.endpoint,c.store.id);return{ok:1}});
 route('POST','/api/push/unsubscribe',async c=>{await run('delete from push_subs where endpoint=? and user_id=?',String(c.body.endpoint||''),c.user.id);return{ok:1}});
-route('POST','/api/push/test',async c=>({ok:1,...await notify(c.store,'تجربة الإشعارات 🔔','إذا وصلك هذا الإشعار فكل شي شغال ✅')}));
-route('GET','/api/push/pending',c=>all("select id,title,body,url from notifs where store_id=? and created>=datetime('now','-3 minutes') order by id desc limit 3",c.store.id));
+route('POST','/api/push/test',async c=>({ok:1,...await notify(c.store,'تجربة الإشعارات','الإشعارات شغالة ✅')}));
+route('POST','/api/push/pending',async c=>{const ep=String(c.body?.endpoint||''),rows=await all("select n.id,n.title,n.body,n.url from notifs n where n.store_id=? and n.created>=datetime('now','-10 minutes') and not exists(select 1 from notif_seen s where s.nid=n.id and s.endpoint=?) order by n.id limit 3",c.store.id,ep);
+for(const r of rows)await run('insert or ignore into notif_seen values(?,?)',r.id,ep);
+if(rows.length)return rows;const l=await one("select id,title,body,url from notifs where store_id=? and created>=datetime('now','-1 hour') order by id desc limit 1",c.store.id);return l?[l]:[]});
 route('GET','/api/instagram/connect',c=>{if(!E.IG_APP_ID||!E.IG_APP_SECRET)return{configured:false,msg:'لم تُضبط بيانات تطبيق Meta بعد (IG_APP_ID / IG_APP_SECRET). الربط غير مفعّل.'};
 return{configured:true,url:`https://www.instagram.com/oauth/authorize?client_id=${E.IG_APP_ID}&redirect_uri=${encodeURIComponent(E.PUBLIC_URL+'/api/instagram/callback')}&response_type=code&scope=instagram_business_basic,instagram_business_manage_messages&state=${c.tok.slice(0,16)}`}});
 route('GET','/api/instagram/callback',async c=>{const q=c.q;if(!q.get('code')||q.get('state')!==c.tok.slice(0,16))throw[400,'طلب ربط غير صالح'];
