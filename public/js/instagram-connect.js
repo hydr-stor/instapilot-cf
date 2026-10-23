@@ -1,30 +1,48 @@
-/* Same-window OAuth handoff. The existing authenticated API owns all OAuth
-   parameters. No credentials, provider URLs or OAuth state are stored or logged.
-   A JavaScript navigation can reduce iOS universal-link handoff; the OS still
-   decides whether an installed application handles a URL. */
+/* The authenticated API owns every OAuth parameter. iOS may hand a navigation
+   to the native app, even after an asynchronous redirect. Offer an explicit
+   copy-and-paste route instead of repeatedly sending a merchant into that app.
+   The URL stays in page memory unless the merchant chooses to copy it; it is
+   never logged or saved in storage, history, or a link to another service. */
 (() => {
   'use strict';
   const card = document.querySelector('.connect-card');
   const status = document.querySelector('#connect-status');
   const help = document.querySelector('#connect-help');
   const button = document.querySelector('#authorize-button');
+  const copyButton = document.querySelector('#copy-button');
+  const guide = document.querySelector('#browser-guide');
+  const manualCopy = document.querySelector('#manual-copy');
+  const linkInput = document.querySelector('#authorization-link');
   const signIn = document.querySelector('#signin-link');
   const attemptKey = 'instapilotInstagramAttempted';
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let destination = null, copying = false;
   let phase = 'ready', generation = 0, controller = null;
   let timeout = 0, navigation = 0, fallback = 0, interrupted = false;
+  card.dataset.browserCopy = String(ios);
+
+  function showGuide() { guide.hidden = false; }
+
+  function clearDestination() {
+    destination = null; linkInput.value = ''; manualCopy.hidden = true;
+    copyButton.disabled = true;
+  }
 
   function clearTimers() {
     clearTimeout(timeout); clearTimeout(navigation); clearTimeout(fallback);
     timeout = navigation = fallback = 0;
   }
 
-  function ready(message = 'إذا لم تُفتح صفحة التفويض، يمكنك المحاولة من الزر أدناه.') {
+  function ready(message = 'إذا فتح الرابط تطبيق إنستغرام أو لم يكتمل الانتقال، استخدم «نسخ رابط الربط».') {
     phase = 'ready'; card.dataset.state = 'ready'; button.disabled = false;
+    copyButton.disabled = !destination || copying;
     status.textContent = message;
-    help.textContent = 'إذا فتح iOS تطبيق إنستغرام وتعذّر الربط، ارجع إلى هذه الصفحة في Safari وأعد المحاولة. لا تغيّر المتصفح أثناء التفويض.';
+    help.textContent = destination ? 'الصق الرابط في شريط العنوان في علامة التبويب الحالية، ثم اضغط «انتقال». زر المتابعة قد يفتح تطبيق إنستغرام بحسب إعدادات الجهاز.' : 'اضغط «المتابعة إلى إنستغرام» لتجهيز محاولة جديدة. يمكنك بعدها نسخ الرابط وإكماله في المتصفح الحالي.';
+    showGuide();
   }
 
   function failed(message, sessionExpired = false) {
+    clearDestination();
     phase = 'ready'; card.dataset.state = 'error';
     button.disabled = sessionExpired; signIn.hidden = !sessionExpired;
     status.textContent = message;
@@ -48,10 +66,11 @@
     return value; // Preserve the API's original encoding, order and state.
   }
 
-  async function begin() {
+  async function begin(navigate = true) {
     if (phase === 'loading' || phase === 'leaving') return;
     const current = ++generation;
     clearTimers(); controller?.abort();
+    clearDestination();
     const requestController = new AbortController(); controller = requestController;
     const signal = requestController.signal;
     phase = 'loading'; card.dataset.state = 'loading'; button.disabled = true;
@@ -70,10 +89,13 @@
       if (current !== generation) return;
       if (result?.configured === false) { failed('ربط إنستغرام غير مفعّل حالياً. تواصل مع إدارة المنصة.'); return; }
       if (result?.configured !== true) throw new Error('Invalid authorization response');
-      let destination;
       try { destination = authorizationURL(result.url); }
       catch { failed('تعذّر التحقق من رابط التفويض أو عنوان العودة. تواصل مع إدارة المنصة.'); return; }
       if (document.hidden) { ready('عُد إلى هذه الصفحة واضغط الزر لبدء التفويض.'); return; }
+      if (!navigate) {
+        ready('لتفادي فتح تطبيق إنستغرام، انسخ رابط الربط وافتحه من شريط عنوان المتصفح.');
+        return;
+      }
       // This flag only prevents an automatic retry loop when navigating Back
       // or reloading. It is unrelated to the provider's security state.
       try { history.replaceState({ ...history.state, [attemptKey]: true }, ''); } catch {}
@@ -101,15 +123,39 @@
     phase = 'ready'; button.disabled = false;
   }
 
-  button.addEventListener('click', begin);
+  async function copyLink() {
+    if (!destination || copying || phase !== 'ready') return;
+    const value = destination, current = generation;
+    copying = true; copyButton.disabled = true; showGuide();
+    try {
+      // Call writeText directly from the click. Fetching here first would lose
+      // Safari's required user activation for clipboard access.
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(value);
+      if (current !== generation || destination !== value) return;
+      status.textContent = 'تم نسخ رابط الربط. الصقه الآن في شريط عنوان المتصفح الحالي.';
+    } catch {
+      if (current !== generation || destination !== value) return;
+      linkInput.value = value; manualCopy.hidden = false;
+      linkInput.focus({ preventScroll: true }); linkInput.select();
+      linkInput.setSelectionRange(0, value.length);
+      status.textContent = 'انسخ الرابط من الحقل أدناه، ثم الصقه في شريط عنوان المتصفح الحالي.';
+    } finally {
+      copying = false; copyButton.disabled = !destination || phase !== 'ready';
+    }
+  }
+
+  button.addEventListener('click', () => begin(true));
+  copyButton.addEventListener('click', copyLink);
   addEventListener('pagehide', pause);
   addEventListener('pageshow', event => {
-    if (event.persisted || interrupted) { interrupted = false; ready('عدت إلى صفحة الربط. اضغط الزر إذا أردت إعادة التفويض.'); }
+    if (event.persisted || interrupted) { interrupted = false; ready('عدت إلى صفحة الربط. يمكنك نسخ الرابط لإكماله في المتصفح الحالي.'); }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) pause();
-    else if (interrupted) { interrupted = false; ready('يمكنك متابعة الربط من الزر أدناه.'); }
+    else if (interrupted) { interrupted = false; ready(); }
   });
-  if (history.state?.[attemptKey]) ready('عدت إلى صفحة الربط. يمكنك بدء محاولة جديدة من الزر أدناه.');
-  else begin();
+  // iPhone/iPad must remain on the guide until the merchant chooses an action.
+  // Back/reload also only prepare a fresh URL; they never re-open Instagram.
+  begin(!ios && !history.state?.[attemptKey]);
 })();

@@ -18,6 +18,10 @@ button:focus-visible,a:focus-visible{outline:2px solid #ade9ca;outline-offset:5p
 [data-state=ready] .status-mark:after{content:'';display:block;width:4px;height:4px;border-radius:50%;background:#bcebc8;margin:4px}
 [data-state=error] .connect-status{border-color:#6c4937;background:#271f18}[data-state=error] .status-mark{animation:none;border-color:#c79669}
 [data-state=error] .connect-status p{color:#f1d1b3}
+.copy-button{display:flex;justify-content:center;align-items:center;min-height:52px;padding:12px 14px;border:1px solid #526e59;border-radius:13px;background:#243a2c;color:#d9eddf;font-size:15px;font-weight:700;transition:transform .15s,background .15s}.copy-button:active{transform:scale(.98)}.copy-button:disabled{opacity:.55;cursor:wait}
+[data-browser-copy=true] .copy-button{background:#c3ebcc;color:#14291c;border-color:#c3ebcc}[data-browser-copy=true] #authorize-button{background:transparent;color:#c3d7c9;border-color:#415948}
+.browser-guide{margin-top:18px;padding:17px 15px;text-align:start;background:#121c16;border:1px solid #34483b;border-radius:14px}.browser-guide h2{margin:0 0 10px;font-size:15px;line-height:1.7;color:#deeee2}.browser-guide ol{margin:0;padding-inline-start:21px;display:grid;gap:9px;font-size:13px;line-height:1.9;color:#c2d5c8}.browser-guide p{font-size:12px;line-height:1.9;color:#a9bbb0;margin:13px 0 0}.browser-guide .link-privacy{color:#8da696;font-size:11px}
+.manual-copy{margin-top:14px}.manual-copy label{display:block;font-size:12px;line-height:1.8;color:#efcdab}.manual-copy input{margin-top:8px;width:100%;min-height:48px;border:1px solid #526e59;border-radius:8px;background:#0f1712;color:#deeee2;padding:10px;font:14px/1.5 system-ui,sans-serif;user-select:text;-webkit-user-select:text}.manual-copy input:focus-visible{outline:2px solid #ade9ca;outline-offset:3px}
 @keyframes spin{to{transform:rotate(360deg)}}@keyframes enter{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 @media(min-width:700px){.connect-card{padding:32px 40px 26px}.connect-visual{margin-top:30px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
