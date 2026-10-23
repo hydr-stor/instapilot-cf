@@ -1,0 +1,23 @@
+@font-face{font-family:Pilot Arabic;src:url('/fonts/pilot-arabic-regular.woff') format('woff');font-style:normal;font-weight:400 500;font-display:swap}
+@font-face{font-family:Pilot Arabic;src:url('/fonts/pilot-arabic-bold.woff') format('woff');font-style:normal;font-weight:600 900;font-display:swap}
+:root{color-scheme:dark;font-family:Pilot Arabic,system-ui,-apple-system,sans-serif;color:#eaf2ee;background:#101715;font-synthesis:none;-webkit-text-size-adjust:100%}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:calc(24px + env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) max(20px,env(safe-area-inset-left,0px));background:radial-gradient(ellipse at 50% 0,rgba(89,168,132,.11),transparent 60%),#101715}
+a{color:inherit;text-decoration:none}button{font:inherit;cursor:pointer}button,a{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+button:focus-visible,a:focus-visible{outline:2px solid #ade9ca;outline-offset:5px}
+.connect-card{width:min(100%,520px);padding:28px 24px 20px;border:1px solid #2b3a32;border-radius:28px;background:linear-gradient(145deg,#1b2621,#151e19);box-shadow:0 24px 80px #0003,inset 0 1px #ffffff07;text-align:center;animation:enter .35s ease-out both}
+.brand{display:inline-flex;align-items:center;gap:10px;min-height:44px;font:600 18px/1.4 system-ui,-apple-system,sans-serif;letter-spacing:-.5px}.brand b{color:#a3dfbc;font-size:12px;letter-spacing:0}.brand-mark{display:grid;place-items:center;width:31px;height:31px;background:#c3f0cf;color:#123c31;border-radius:9px;font-size:23px}
+.connect-visual{width:96px;height:96px;margin:25px auto 20px;position:relative;display:grid;place-items:center;color:#c5edcf;background:radial-gradient(circle,#a0e8b513,transparent 70%)}
+.connect-orbit{position:absolute;inset:0;border:1px solid #3e5a46;border-radius:50%}.connect-orbit:after{content:'';position:absolute;top:8px;left:13px;width:8px;height:8px;border-radius:50%;background:#bcebc8;box-shadow:0 0 14px #8adea540}
+.eyebrow{display:block;color:#b3c7b9;font-size:12px;margin-bottom:10px}h1{margin:0;color:#f0f6ef;font-size:clamp(29px,7.7vw,38px);line-height:1.4;font-weight:700;letter-spacing:-.6px}.intro{font-size:15px;line-height:1.9;color:#a9bbb0;margin:16px 0 20px}
+.connect-status{display:flex;gap:10px;align-items:flex-start;text-align:start;padding:14px;border:1px solid #34483b;border-radius:14px;background:#131e17;min-height:69px}.connect-status p{margin:0;font-size:14px;line-height:1.8}.status-mark{width:16px;height:16px;flex:none;margin-top:5px;border:2px solid #52705d;border-top-color:#b9ebc8;border-radius:50%;animation:spin .8s linear infinite}
+.help{font-size:12px;line-height:1.9;color:#a9bbb0;text-align:start;margin:10px 3px 20px;min-height:46px}.connect-actions{display:grid;gap:9px}#authorize-button,.signin-link{display:flex;justify-content:center;align-items:center;gap:12px;min-height:52px;border:1px solid #c3ebcc;border-radius:13px;padding:12px 14px;font-size:15px;font-weight:700;background:#c3ebcc;color:#14291c;transition:transform .15s,background .15s}#authorize-button:active,.signin-link:active{transform:scale(.98)}#authorize-button:disabled{cursor:wait;opacity:.55}.return-link{display:grid;place-items:center;min-height:44px;color:#b3c7b9;font-size:14px}
+.connect-steps{margin:23px 0 0;padding:19px 0 0;border-top:1px solid #304036;list-style:none;display:grid;gap:10px;text-align:start}.connect-steps li{display:flex;align-items:center;gap:10px;font-size:12px;line-height:1.8;color:#a9bbb0}.connect-steps span{flex:none;direction:ltr;color:#7e9f89;font:11px/1.8 system-ui,sans-serif;min-width:26px}.privacy-note{font-size:11px;color:#8da696;margin:20px 0 0;line-height:1.8}.noscript-message{font-size:14px;line-height:1.9;color:#f3cea8}
+[hidden]{display:none!important}
+[data-state=ready] .status-mark,[data-state=leaving] .status-mark{animation:none;border-color:#90c9a0}
+[data-state=ready] .status-mark:after{content:'';display:block;width:4px;height:4px;border-radius:50%;background:#bcebc8;margin:4px}
+[data-state=error] .connect-status{border-color:#6c4937;background:#271f18}[data-state=error] .status-mark{animation:none;border-color:#c79669}
+[data-state=error] .connect-status p{color:#f1d1b3}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes enter{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@media(min-width:700px){.connect-card{padding:32px 40px 26px}.connect-visual{margin-top:30px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
