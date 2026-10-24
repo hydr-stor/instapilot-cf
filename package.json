@@ -1,1 +1,1 @@
-{"name":"instapilot-cf","private":true,"type":"module","scripts":{"deploy":"wrangler deploy"}}
+{"name":"instapilot-cf","private":true,"type":"module","scripts":{"deploy":"wrangler deploy","test":"node tests/smart-inbox.test.mjs","preview:inbox":"node scripts/preview-smart-inbox.mjs"}}
