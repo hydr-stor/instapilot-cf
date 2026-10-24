@@ -2,6 +2,15 @@ const UNKNOWN_REPLY = 'مافهمت عليك اعد صياغ الجملة وخل
 const HANDOFF_ACK = 'تم تحويل طلبك للمتابعة ويا صاحب المتجر. راح يرد عليك من هنا.';
 const HANDOFF_OFFER = 'إذا تحب تحچي ويا صاحب المتجر، كلي وأحوّل طلبك للمتابعة.';
 const DAY = 86400000;
+function transportFailure(error) {
+  const name = ['AbortError','TimeoutError','TypeError','Error'].includes(error?.name) ? error.name : 'Error';
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const reason = name === 'TimeoutError' || /timed?\s*out|timeout/i.test(message) ? 'TIMEOUT'
+    : /redirect/i.test(message) ? 'REDIRECT'
+    : /different request|request context|I\/O|illegal invocation/i.test(message) ? 'WORKER_CONTEXT'
+    : name === 'AbortError' ? 'ABORTED' : 'NETWORK_OR_RUNTIME';
+  return {name,reason};
+}
 const id = () => crypto.randomUUID();
 const bytes = text => new TextEncoder().encode(text).length;
 const norm = text => String(text || '').normalize('NFKC').replace(/[\u064B-\u065F\u0640]/g, '').replace(/[أإآ]/g, 'ا').replace(/چ/g, 'ج').replace(/[ىی]/g, 'ي').replace(/ة/g, 'ه').replace(/[گک]/g, 'ك').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -393,7 +402,8 @@ class SmartInbox {
       const expired=result?.error?.code===190,permission=[10,200].includes(result?.error?.code),rate=response.status===429 || [4,17,32,613].includes(result?.error?.code);
       return this.finish(row,'FAILED',null,{code:expired?'TOKEN_EXPIRED':permission?'PERMISSION_DENIED':rate?'RATE_LIMIT':'META_REJECTED',
         message:expired?'انتهت صلاحية ربط إنستغرام. أعد ربط الحساب.':permission?'رفض إنستغرام الصلاحيات أو نافذة الرد. راجع إعدادات Meta.':rate?'وصل الحساب إلى حد الإرسال. حاول لاحقاً.':'رفض إنستغرام إرسال الرسالة.',retriable:rate || !expired && !permission});
-    } catch {
+    } catch (error) {
+      console.warn('inbox_send_transport_failure',JSON.stringify({store_id:row.store_id,outbox_id:row.id,...transportFailure(error)}));
       return this.finish(row,'UNKNOWN',null,{code:'DELIVERY_UNKNOWN',message:'انقطع الاتصال قبل تأكيد النتيجة. انتظر تأكيد إنستغرام ولا تكرر الرسالة.',retriable:false});
     }
   }
@@ -506,4 +516,4 @@ class SmartInbox {
   }
 }
 
-export { SmartInbox, InboxError, UNKNOWN_REPLY, HANDOFF_ACK, HANDOFF_OFFER, wantsHuman, safeMediaURL };
+export { SmartInbox, InboxError, UNKNOWN_REPLY, HANDOFF_ACK, HANDOFF_OFFER, wantsHuman, safeMediaURL, transportFailure };
