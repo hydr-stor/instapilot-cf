@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { LocalD1 } from './helpers/local-d1.mjs';
 import worker from '../src/worker.js';
-import { SmartInbox, UNKNOWN_REPLY, HANDOFF_ACK, HANDOFF_OFFER, wantsHuman } from '../src/smart-inbox.js';
+import { SmartInbox, UNKNOWN_REPLY, HANDOFF_ACK, HANDOFF_OFFER, wantsHuman, transportFailure } from '../src/smart-inbox.js';
 import { createFixture, webhook, decrypt, BASE, sid2 } from './helpers/inbox-fixture.mjs';
 const sqlite=new DatabaseSync(':memory:');
 const fixture=await createFixture(sqlite,worker);
@@ -22,6 +22,29 @@ after(()=>{globalThis.fetch=originalFetch;sqlite.close();});
 await test('Smart Inbox: real Worker, SQLite transactions and local provider double',async t=>{
   t.beforeEach(()=>fixture.reset());
   t.afterEach(()=>assert.deepEqual(fixture.meta.state.unsupported,[]));
+  await t.test('transport diagnostics redact exception content and retain uncertain-send protection',async()=>{
+    for(const [name,message,reason] of [
+      ['TimeoutError','request timeout access_token=PRIVATE_TEST_TOKEN','TIMEOUT'],
+      ['TypeError','redirect https://example.invalid/?access_token=PRIVATE_TEST_TOKEN','REDIRECT'],
+      ['Error','Cannot perform I/O on behalf of a different request PRIVATE_TEST_TOKEN','WORKER_CONTEXT'],
+      ['AbortError','PRIVATE_TEST_TOKEN','ABORTED'],
+      ['PRIVATE_TEST_TOKEN','PRIVATE_TEST_TOKEN','NETWORK_OR_RUNTIME']
+    ]) {
+      const info=transportFailure({name,message});
+      assert.equal(info.reason,reason);assert(!JSON.stringify(info).includes('PRIVATE_TEST_TOKEN'));
+    }
+    await fixture.receive(webhook());await takeover();fixture.meta.state.mode='network';
+    const original=console.warn,logs=[];console.warn=(...args)=>logs.push(args);
+    try {
+      const key=crypto.randomUUID();const r=await send('تشخيص محلي',{idempotency_key:key});
+      assert.equal(r.body.status,'UNKNOWN');assert(conv().active_send_id);
+      await send('تشخيص محلي',{idempotency_key:key});assert.equal(fixture.meta.state.sends.length,1);
+      assert.equal(logs.length,1);assert.equal(logs[0][0],'inbox_send_transport_failure');
+      const detail=JSON.parse(logs[0][1]);assert.equal(detail.reason,'NETWORK_OR_RUNTIME');assert.equal(detail.store_id,1);
+      assert.deepEqual(Object.keys(detail).sort(),['name','outbox_id','reason','store_id']);
+      assert(!JSON.stringify(logs).includes('تشخيص محلي'));assert(!JSON.stringify(logs).includes('LOCAL_IG_TOKEN'));
+    } finally {console.warn=original;}
+  });
   await t.test('signed inbound is durable and unread; duplicate deliveries count once',async()=>{
     const payload=webhook('رسالة من الزبون','original-meta-mid');
     const responses=await Promise.all(Array.from({length:12},()=>fixture.receive(payload)));
