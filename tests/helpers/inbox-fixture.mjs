@@ -25,6 +25,7 @@ function webhook(text='مرحبا',mid='incoming-1',account='90001',customer='80
 function makeMetaDouble() {
   const state={sends:[],profiles:0,unsupported:[],mode:'ok',aiReply:'أهلاً بيك. شلون أساعدك؟',aiCalls:0,holdAI:null,holdSend:null,confirmed:new Map()};
   async function fakeFetch(input,options={}) {
+    if(options.redirect==='error')throw new TypeError('Invalid redirect value, must be one of "follow" or "manual"');
     const u=new URL(typeof input==='string'?input:input.url);
     if(u.origin==='https://api.instagram.com'&&u.pathname==='/oauth/access_token')return Response.json({access_token:'LOCAL_SHORT_TOKEN_NOT_REAL',user_id:state.oauthAccount||'90001'});
     if (u.origin==='https://api.groq.com' && u.pathname==='/openai/v1/chat/completions') {
@@ -37,10 +38,12 @@ function makeMetaDouble() {
       if(u.pathname==='/v21.0/me'&&u.searchParams.get('fields')==='user_id,username')return Response.json({user_id:state.oauthAccount||'90001',username:'local_oauth_account'});
       if(options.method==='POST'&&/\/subscribed_apps$/.test(u.pathname))return state.mode==='permissions'?Response.json({error:{code:10}},{status:403}):Response.json({success:true});
       if (options.method==='POST' && /^\/v21\.0\/\d+\/messages$/.test(u.pathname)) {
+        if(options.redirect!=='manual')throw new Error('Meta requests must not follow redirects');
         const payload=JSON.parse(options.body),account=u.pathname.split('/')[2];
         const call={account,recipient:payload.recipient.id,text:payload.message.text,tag:payload.tag,messaging_type:payload.messaging_type};
         if (options.headers.authorization!=='Bearer '+LOCAL_TOKEN+account) throw new Error('Local token/store mismatch');
         state.sends.push(call);
+        if(state.mode==='redirect')return new Response(null,{status:307,headers:{location:'https://untrusted.local.invalid/capture'}});
         if (state.holdSend) await state.holdSend;
         if (state.mode==='network') throw new TypeError('Local simulated transport interruption');
         if (state.mode==='expired') return Response.json({error:{code:190,message:'Local expired token'}},{status:400});
