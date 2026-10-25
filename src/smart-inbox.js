@@ -287,7 +287,7 @@ class SmartInbox {
     let ok=false;
     try{
       const response=await this.fetch('https://graph.instagram.com/'+this.version()+'/'+encodeURIComponent(current.ig_user_id)+'/subscribed_apps?subscribed_fields=messages',{
-        method:'POST',headers:{authorization:'Bearer '+await this.decrypt(current.ig_token)},signal:AbortSignal.timeout(8000),redirect:'error'});
+        method:'POST',headers:{authorization:'Bearer '+await this.decrypt(current.ig_token)},signal:AbortSignal.timeout(8000),redirect:'manual'});
       const body=await response.json();ok=response.ok&&body.success===true;
     }catch{}
     await this.run('INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)','inbox-subscription:'+store.id,JSON.stringify({ok,checked_at:this.now()}));
@@ -302,7 +302,7 @@ class SmartInbox {
     try {
       const token=await this.decrypt(store.ig_token);
       const r=await this.fetch('https://graph.instagram.com/'+this.version()+'/'+encodeURIComponent(c.customer_id)+'?fields=name,username,profile_pic',{
-        headers:{authorization:'Bearer '+token},signal:AbortSignal.timeout(6000),redirect:'error'
+        headers:{authorization:'Bearer '+token},signal:AbortSignal.timeout(6000),redirect:'manual'
       });
       const j=await r.json();
       if (!r.ok || j.error) return;
@@ -394,9 +394,10 @@ class SmartInbox {
     try {
       const response=await this.fetch('https://graph.instagram.com/'+this.version()+'/'+encodeURIComponent(c.instagram_account_id)+'/messages',{
         method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},
-        body:JSON.stringify(payload),redirect:'error',signal:AbortSignal.timeout(10000)
+        body:JSON.stringify(payload),redirect:'manual',signal:AbortSignal.timeout(10000)
       });
       const result=await response.json().catch(()=>null);
+      if (response.status>=300 && response.status<400) return this.finish(row,'UNKNOWN',null,{code:'META_REDIRECT',message:'أعاد إنستغرام توجيه الطلب. لم نتبع التحويل لحماية رمز الوصول، ولن نكرر الرسالة تلقائياً.',retriable:false});
       if (response.ok && typeof result?.message_id==='string' && result.message_id.length<=512) return this.finish(row,'SENT',result.message_id);
       if (response.status>=500 || response.status===408 || response.ok) return this.finish(row,'UNKNOWN',null,{code:'DELIVERY_UNKNOWN',message:'لم يؤكد إنستغرام نتيجة الإرسال. لن نعيد إرسال الرسالة تلقائياً.',retriable:false});
       const expired=result?.error?.code===190,permission=[10,200].includes(result?.error?.code),rate=response.status===429 || [4,17,32,613].includes(result?.error?.code);
@@ -493,7 +494,7 @@ class SmartInbox {
     let r,j;
     try {
       r=await this.fetch('https://graph.instagram.com/'+this.version()+'/'+encodeURIComponent(metaId)+'?fields=id,message,from,to,created_time',{
-        headers:{authorization:'Bearer '+await this.decrypt(store.ig_token)},signal:AbortSignal.timeout(8000),redirect:'error'});
+        headers:{authorization:'Bearer '+await this.decrypt(store.ig_token)},signal:AbortSignal.timeout(8000),redirect:'manual'});
       j=await r.json();
     } catch { throw new InboxError(502,'META_UNAVAILABLE','تعذّر التحقق من رسالة Meta. بقيت الحالة دون تغيير.'); }
     const recipients=Array.isArray(j?.to?.data)?j.to.data:[];

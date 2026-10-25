@@ -22,6 +22,16 @@ after(()=>{globalThis.fetch=originalFetch;sqlite.close();});
 await test('Smart Inbox: real Worker, SQLite transactions and local provider double',async t=>{
   t.beforeEach(()=>fixture.reset());
   t.afterEach(()=>assert.deepEqual(fixture.meta.state.unsupported,[]));
+  await t.test('Workers redirect restrictions permit send and subscription but never follow a redirect',async()=>{
+    const subscription=await api('subscribe',{});assert.equal(subscription.status,200);assert.equal(subscription.body.ok,true);
+    await fixture.receive(webhook());await takeover();
+    const sent=await send('اختبار توافق Workers');assert.equal(sent.body.status,'SENT');
+    fixture.meta.state.mode='redirect';const key=crypto.randomUUID();
+    const blocked=await send('لا تتبع التحويل',{idempotency_key:key});
+    assert.equal(blocked.body.status,'UNKNOWN');assert.equal(blocked.body.error.code,'META_REDIRECT');
+    assert(conv().active_send_id);await send('لا تتبع التحويل',{idempotency_key:key});
+    assert.equal(fixture.meta.state.sends.length,2);assert.deepEqual(fixture.meta.state.unsupported,[]);
+  });
   await t.test('transport diagnostics redact exception content and retain uncertain-send protection',async()=>{
     for(const [name,message,reason] of [
       ['TimeoutError','request timeout access_token=PRIVATE_TEST_TOKEN','TIMEOUT'],
